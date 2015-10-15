@@ -902,10 +902,9 @@ function Updater:__init()
 	self.Host = nil
 	self.ScriptPath = nil
 	self.VersionPath = nil
-	self.LibraryPath = "DevnBoL/BoL1.0Scripts/master/GodLib/"
 end
 function Updater:UpdateLibrary()
-	return self:CheckForUpdate(LIB_VERSION, UpdateHost.GitHub, self.LibraryPath.."GodLib.lua", self.LibraryPath.."Current.version", LIB_PATH.."GodLib.lua", "GodLib.lua")
+	return self:CheckForUpdate(LIB_VERSION, UpdateHost.GitHub, "DevnBoL/Scripts/master/Common/GodLib.lua", "DevnBoL/Scripts/master/Versions/GodLib.version", LIB_PATH.."GodLib.lua", "GodLib")
 end
 function Updater:UpdateScript()
 	return self:CheckForUpdate(ScriptInfo.Version, self.Host, self.ScriptPath, self.VersionPath)
