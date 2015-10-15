@@ -2755,8 +2755,8 @@ end
 
 Class("DialogBox")
 function DialogBox:__init(title, width, callback)
-	self.Title = Format("{1}: {2}", Script.Name, title)
-	self.Info = Format("Version {1} - Tested With LoL {2}", Script.Version, Script.LeagueVersion)
+	self.Title = Format("{1}: {2}", ScriptInfo.Name, title)
+	self.Info = Format("Version {1} - Tested With LoL {2}", ScriptInfo.Version, ScriptInfo.LeagueVersion)
 	self.Lines = { }
 	self.Buttons = { }
 	self.Width = width or 500
