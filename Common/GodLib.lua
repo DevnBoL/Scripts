@@ -949,27 +949,24 @@ function RequiredLibraries:Add(library, url, sacWillDownload)
 end
 function RequiredLibraries:Load()
 	local downloads = 0
+	local toDownload = { }
 	for i = 1, #self.List do
 		local library = self.List[i]
-		if ((library.Name ~= "SxOrbWalk") or not Orbwalker.SacFound) then
-			local path = Format("{1}{2}.lua", LIB_PATH, library.Name)
-			if (not FileExist(path)) then
-				if (not library.IsSac or not Orbwalker.SacFound) then
-					downloads = downloads + 1
-					if (downloads == 1) then
-						self.Alerter = NotificationAlert("Downloading required libraries...")
-						PrintLocal("Downloading required libraries, please don't reload the script...")
-					end
-					DownloadFile(library.Url, path, function()
-						downloads = downloads - 1
-						if (downloads == 0) then
-							self.Alerter:Remove()
-							self.Alerter = NotificationAlert("Finished downloading required libraries!")
-							PrintLocal("Finished downloading required libraries! Please reload the script (double F9)...")
-						end
-					end)
-				end
+		local path = Format("{1}{2}.lua", LIB_PATH, library.Name)
+		if (not FileExist(path)) then
+			downloads = downloads + 1
+			if (downloads == 1) then
+				self.Alerter = NotificationAlert("Downloading required libraries...")
+				PrintLocal("Downloading required libraries, please don't reload the script...")
 			end
+			DownloadFile(library.Url, path, function()
+				downloads = downloads - 1
+				if (downloads == 0) then
+					self.Alerter:Remove()
+					self.Alerter = NotificationAlert("Finished downloading required libraries!")
+					PrintLocal("Finished downloading required libraries! Please reload the script (double F9)...")
+				end
+			end)
 		end
 	end
 	if (downloads == 0) then
@@ -994,7 +991,7 @@ function Orbwalker:__init()
 	self.__AddedOnProcessAttackSpellCallback = false
 	self.__SacAlerter = nil
 	self.Config = nil
-	self.SacFound = _G.Reborn_Loaded
+	self.SacFound = false
 	self.SacLoaded = false
 	self.AddedSacLoadMessage = false
 	self.Attacking = false
@@ -1056,6 +1053,7 @@ function Orbwalker:__InitSac(disableSacSpells)
 	end
 end
 function Orbwalker:Initialize(disableSacSpells)
+	self.SacFound = _G.Reborn_Loaded
 	if (not self.SacFound) then
 		self.Ready = true
 		SxOrb:RegisterBeforeAttackCallback(function(target) self:__BeforeAttack(target) end)
