@@ -66,7 +66,7 @@ if (FileExist(LIB_PATH.."GodLib.lua")) then
 	assert(load(ReadFile(LIB_PATH.."GodLib.lua"), "GodLib", "t", _ENV))()
 else
 	PrintChat("Downloading GodLib, please don't reload script!")
-	DownloadFile("", LIB_PATH.."GodLib.lua", function()
+	DownloadFile("raw.githubusercontent.com/DevnBoL/Scripts/master/Common/GodLib.lua?rand="..math.random(1, 10000), LIB_PATH.."GodLib.lua", function()
 		PrintChat("Finsihed downloading GodLib, please reload script!")
 	end)
 	return
@@ -83,8 +83,8 @@ Script:LoadSave()
 Script:LoadUserSettings()
 
 Updater.Host = UpdateHost.GitHub
-Updater.ScriptPath = "DevnBoL/Scripts/master/DevnsDonger/Devn's Donger.lua"
-Updater.VersionPath = "DevnBoL/Scripts/master/DevnsDonger/Current.version.lua"
+Updater.ScriptPath = "DevnBoL/Scripts/master/Devn's Donger.lua"
+Updater.VersionPath = "DevnBoL/Scripts/master/Versions/Devn's Donger.version"
 
 if (Updater:UpdateLibrary()) then return end
 if (Updater:UpdateScript()) then return end
