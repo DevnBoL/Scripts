@@ -1535,7 +1535,7 @@ function AutoBuy:__init()
 	self.ItemOrders = { }
 	self.BuyItem = {
 		["5.19"] = _G.BuyItem,
-		["5.20"] = _G.BuyItem,
+		["5.20"] = nil,
 	}
 end
 function AutoBuy:Initialize(defaultOrder)
