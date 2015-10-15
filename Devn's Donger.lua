@@ -66,7 +66,7 @@ if (FileExist(LIB_PATH.."GodLib.lua")) then
 	assert(load(ReadFile(LIB_PATH.."GodLib.lua"), "GodLib", "t", _ENV))()
 else
 	PrintChat("Downloading GodLib, please don't reload script!")
-	DownloadFile("raw.githubusercontent.com/DevnBoL/Scripts/master/Common/GodLib.lua?rand="..math.random(1, 10000), LIB_PATH.."GodLib.lua", function()
+	DownloadFile("https://raw.githubusercontent.com/DevnBoL/Scripts/master/Common/GodLib.lua?rand="..math.random(1, 10000), LIB_PATH.."GodLib.lua", function()
 		PrintChat("Finsihed downloading GodLib, please reload script!")
 	end)
 	return
