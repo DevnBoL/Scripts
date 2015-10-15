@@ -6,7 +6,7 @@
 
 	Script:     Devn's Donger
 	Version:    2.00
-	Build Date: 2015-10-14
+	Build Date: 2015-10-15
 	Author:     Devn
 
 ---//==================================================\\---
@@ -76,8 +76,8 @@ ScriptInfo.Name = "Devn's Donger"
 ScriptInfo.Variables = "DevnsDonger"
 ScriptInfo.Author = "Devn"
 ScriptInfo.Version = "2.00"
-ScriptInfo.Date = "2015-10-14"
-ScriptInfo.LeagueVersion = "5.19"
+ScriptInfo.Date = "2015-10-15"
+ScriptInfo.LeagueVersion = "5.20"
 
 Script:LoadSave()
 Script:LoadUserSettings()
