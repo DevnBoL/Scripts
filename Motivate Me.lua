@@ -5,7 +5,7 @@
 ---\\==================================================//---
 
 	Script:     Motivate Me
-	Version:    1.02
+	Version:    2.00
 	Build Date: 2015-10-26
 	Author:     Devn
 
