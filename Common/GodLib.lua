@@ -5,8 +5,8 @@
 ---\\==================================================//---
 
 	Library:    GodLib
-	Version:    3.00
-	Build Date: 2015-10-15
+	Version:    3.01
+	Build Date: 2015-10-16
 	Author:     Devn
 
 ---//==================================================\\---
@@ -22,18 +22,49 @@
 	Version 3.00:
 		- Library re-write for public use.
 
+	Version 3.01:
+		- Added 'WardNames' table.
+		- Added 'CastSpellAt' function.
+		- Changed 'AutoPotions' to use 'OnProcessSpell' callback.
+		- SAC:R notification will only be shown once across multiple scripts.
+		- Added 'POTION_DURATION' variable.
+		- Fixed error in 'Selector' printing target names on new selection.
+		- Added 'Notifications' class, credits to BlueCore.
+		- Added 'Selector.Targets' table.
+		- Removed 'SpellData.Update' function.
+		- Added 'SpellData.UpdateRange' and 'SpellData.UpdateWidth'.
+
 --]]
 
 ---//==================================================\\---
 --|| > Script Variables                                 ||--
 ---\===================================================//---
 
-LIB_VERSION = 3.00
+LIB_VERSION = 3.01
 
+UPDATE_SAFE_TIMER = 180 -- Script will stop attempting to update after this time (ms) has passed in-game.
+ORBWALKER_ATTACK_RESET = 2 -- Orbwalker 'Attacking' variable will be reset after this time incase 'OnAfterAttack' doesn't get called.
+MAX_OBJ_DISTANCE = 50 -- Max distance object can be from unit to be valid.
+LEVEL_SPELL_DELAY = 1 -- Delay in seconds between leveling spells.
+
+MIN_VISION_RANGE = 1000 -- The minimum range script can look for enemies.
+DEF_VISION_RANGE = 2500 -- The default range script will look for enemies.
+MAX_VISION_RANGE = 5000 -- The max range script can look for enemies.
+
+POTION_DURATION = 15 -- Duration for health and mana potions.
+
+NOTIFICATION_THICKNESS = 66
+NOTIFICATION_LENGTH = 276
+NOTIFICATION_DURATION = 5
+
+Assert = _G.assert
 PrintDebug = function() end
 
 SelectorMode = { }
+
 HitchanceOptions = { "Low", "Medium", "High" }
+AccuracyOptions = { "Default", "Low", "Very Low" }
+WardNames = { "TrinketTotemLvl1", "TrinketTotemLvl3", "ItemMiniWard", "ItemGhostWard", "TrinketTotemLvl4", "SightWard", "VisionWard" }
 
 DefaultLibrary = {
 	Orbwalker = { "SxOrbWalk", "" },
@@ -127,6 +158,11 @@ BuffType = {
 	Knockback = 30,
 	Disarm = 31,
 }
+Potions = {
+	Health = "Health",
+	Mana = "Mana",
+	Flask = "Flask",
+}
 
 ---//==================================================\\---
 --|| > Library Variables                                ||--
@@ -134,15 +170,6 @@ BuffType = {
 
 local DEFAULT_SCRIPT_NAME = "GodScript"
 local DEFAULT_SCRIPT_VERSION = "0.01"
-
-local UPDATE_SAFE_TIMER = 180 -- Script will stop attempting to update after this time (ms) has passed in-game.
-local ORBWALKER_ATTACK_RESET = 2 -- Orbwalker 'Attacking' variable will be reset after this time incase 'OnAfterAttack' doesn't get called.
-local MAX_OBJ_DISTANCE = 50 -- Max distance object can be from unit to be valid.
-local LEVEL_SPELL_DELAY = 1 -- Delay in seconds between leveling spells.
-
-local MIN_VISION_RANGE = 1000 -- The minimum range script can look for enemies.
-local DEF_VISION_RANGE = 2000 -- The default range script will look for enemies.
-local MAX_VISION_RANGE = 3000 -- The max range script can look for enemies.
 
 local ColorValues = {
 	["White"] = { 255, 255, 255, 255 },
@@ -200,11 +227,47 @@ local VSkillshot = {
 --|| > Misc. Functions                                  ||--
 ---\===================================================//---
 
+function DAssert(condition, message)
+	if (type(condition) == "function") then
+		if (condition() == true) then
+			return
+		end
+	elseif (condition == true) then
+		return
+	end
+	local info = debug.getinfo(2)
+	local info2 = debug.getinfo(3)
+	local caller = ""
+	local params = ""
+	if (info2 and info2.name and (#info2.name > 0)) then
+		caller = info2.name.." => "
+	end
+	for i = 1, info.nparams do
+		local name, value = debug.getlocal(2, i)
+		if (value == nil) then
+			value = "nil"
+		elseif (type(value) == "string") then
+			value = Format("\"{1}\"", value)
+		elseif (type(value) == "number") then
+			value = tostring(value)
+		elseif (value.charName) then
+			value = value.charName
+		else
+			value = ToString(value)
+		end
+		params = params..name..":"..value
+		if (i < info.nparams) then
+			params = params..", "
+		end
+	end
+	assert(false, Format("[{4}]:{5} => {1} {6}({2}) {3}", caller, params, message, FILE_NAME, info2.currentline, info.name))
+end
 function Class(name, base)
 	local o = { }
 	o.__index = o
 	if (base) then
-		if (type(base) == "table") then setmetatable(o, base) end
+		Assert(type(base) == "table", "Class: table expected for <base>")
+		setmetatable(o, base)
 		o.__base = base
 	end
 	setmetatable(o, {
@@ -224,6 +287,7 @@ function Class(name, base)
 	_ENV[name] = o
 end
 function Format(input, ...)
+	Assert(input and (type(input) == "string"), "Format: string expected for <input>")
 	local args = { ... }
 	for i = 1, #args do
 		input = input:gsub("{"..tostring(i).."}", ToString(args[i]))
@@ -288,6 +352,9 @@ function ParseColor(color, argb, alpha)
 	local argb = argb or false
 	local alpha = alpha or 255
 	local color = color or { alpha, 255, 255, 255 }
+	if (type(color) == "number") then
+		print("color: "..tostring(color))
+	end
 	if ((type(color) == "string") and ColorValues[color]) then
 		local value = ColorValues[color]
 		if (not argb) then
@@ -302,11 +369,20 @@ function ParseColor(color, argb, alpha)
 	end
 	return ARGB(math.min(alpha, color[1]), color[2], color[3], color[4])
 end
+function Round(num, idp)
+	local mult = 10^(idp or 0)
+	return math.floor(num * mult + 0.5) / mult
+end
 
-function PrintLocal(text, messageType)
+function PrintLocal(text, messageType, showName)
+	if (showName == nil) then
+		showName = true
+	end
 	local message = Format("<font color=\"#{1}\">{2}</font>", messageType, text)
 	local messageType = messageType or MessageType.Info
-	if (ScriptInfo.Name) then message = Format("<font color=\"#8183F7\">{1}:</font> {2}", ScriptInfo.Name, message) end
+	if (showName and ScriptInfo.Name) then
+		message = Format("<font color=\"#8183F7\">{1}:</font> {2}", ScriptInfo.Name, message)
+	end
 	PrintChat(message)
 end
 function NotificationAlert(text, delay)
@@ -317,7 +393,7 @@ function GetRealLatency()
 end
 
 function SafeWebResult(host, path)
-	local result = GetWebResult(host, path)
+	local result = GetWebResult(host, UrlEncode(path))
 	if (not result or (type(result) ~= "string") or (result == "0") or (#result == 0) or result:lower():find("400: invalid request") or result:lower():find("not found")) then
 		return nil
 	end
@@ -333,12 +409,15 @@ end
 
 function CCastSpell(spell, posX, posZ)
 	if (posX and posZ) then
-		CastSpell(spell, posX, posZ)
+		return CastSpell(spell, posX, posZ)
 	elseif (posX) then
-		CastSpell(spell, posX)
+		return CastSpell(spell, posX)
 	else
-		CastSpell(spell)
+		return CastSpell(spell)
 	end
+end
+function CastSpellAt(spell, pos)
+	return CCastSpell(spell, pos.x, pos.z)
 end
 function SpellIsReady(spell)
 	return (myHero:CanUseSpell(spell) == READY)
@@ -371,6 +450,14 @@ function HaveManaForSpells(qMana, qCasts, wMana, wCasts, eMana, eCasts, rMana, r
 		cost = cost + (rMana * rCasts)
 	end
 	return (myHero.mana >= cost)
+end
+function GetSummonerSlot(name)
+	if (myHero:GetSpellData(SUMMONER_1).name:lower() == name:lower()) then
+		return SUMMONER_1
+	elseif (myHero:GetSpellData(SUMMONER_2).name:lower() == name:lower()) then
+		return SUMMONER_2
+	end
+	return nil
 end
 
 function InRange(object, range, from)
@@ -418,15 +505,14 @@ function GetAlliesInRange(range, from)
 	return allies
 end
 function GetPriority(unit)
-	local priority = Selector:GetPriority(unit)
 	local convert = {
 		[1] = 5,
 		[2] = 4,
 		[3] = 3,
-		[2] = 2,
-		[1] = 1,
+		[4] = 2,
+		[5] = 1,
 	}
-	return convert[priority]
+	return convert[Selector:GetPriority(unit)]
 end
 function IsUnderEnemyTurret(pos)
 	local turrets = GetTurrets()
@@ -442,10 +528,12 @@ function IsUnderEnemyTurret(pos)
 end
 function IsValid(target, range, from)
 	local from = from or myHero
-	local buffs = { BuffType.Invisibility, BuffType.Invulnerability, BuffType.Counter }
+	local buffs = { BuffType.Invisibility, BuffType.Invulnerability }
 	if (ValidTarget(target)) then
 		for i = 1, #buffs do
-			if (UnitHasBuffOfType(buffs[i], target)) then return false end
+			if (UnitHasBuffOfType(buffs[i], target)) then
+				return false
+			end
 		end
 		if (not range or InRange(target, range, from)) then
 			if (not (UnitHasBuff("UndyingRage", target) and (target.health == 1)) and not UnitHasBuff("JudicatorIntervention", target) and not UnitHasBuff("KogMawIcathianSurprise", target)) then
@@ -455,6 +543,53 @@ function IsValid(target, range, from)
 	end
 	return false
 end
+function GetBarInfo(unit)
+    local barPos = GetUnitHPBarPos(unit)
+    local barOffset = GetUnitHPBarOffset(unit)
+    local offsetX = {
+        ["Darius"] = -0.05,
+        ["Renekton"] = -0.05,
+        ["Sion"] = -0.05,
+        ["Thresh"] = -0.03,
+    }
+    local offsetY = {
+        ["XinZhao"] = 1,
+        ["Velkoz"] = -2.65,
+    }
+	if (offsetX[unit.charName]) then
+		barOffset.x = offsetX[unit.charName]
+	end
+	if (offsetY[unit.charName]) then
+		barOffset.y = offsetY[unit.charName]
+	end
+    return D3DXVECTOR2(barPos.x + barOffset.x * 150 - 70, barPos.y + barOffset.y * 50 + 13)
+end
+function IsEvading()
+	return (_G.Evadeee_evading or (_G.EzEvade and _G.EzEvade.Evading) or _G.Evading or _G.evade)
+end
+function IsFleeing(unit, distance, from)
+	local position = GetPredictedPosition(unit, 0.26)
+	if (position and not InRange(position, distance, from)) then
+		return true
+	end
+	return false
+end
+function EnemyIsInRange(range, from)
+	local from = from or myHero
+	return (#GetEnemiesInRange(range, from) > 0)
+end
+function GetPredictedHealth(unit, waittime)
+	local waittime = waittime or 0.2
+	if (waittime > 0) then
+		return Prediction:GetPredictedHealth(unit, waittime)
+	end
+	return unit.health
+end
+function GetHitBox(unit)
+	return unit.boundingRadius or 65
+end
+
+--[[ Old HP bar functions.
 function GetBarInfo(unit)
 	local pos, ccd
 	if (unit.type == myHero.type) then
@@ -529,27 +664,7 @@ function GetHPBarPos2(unit)
 	local vec2 = Vector(pos.x + 108, pos.y, 0)
 	return Vector(vec1.x, vec1.y, 0), Vector(vec2.x, vec2.y, 0)
 end
-function IsEvading()
-	return (_G.Evadeee_evading or (_G.EzEvade and _G.EzEvade.Evading) or _G.Evading or _G.evade)
-end
-function IsFleeing(unit, distance, from)
-	local position = GetPredictedPosition(unit, 0.26)
-	if (position and not InRange(position, distance, from)) then
-		return true
-	end
-	return false
-end
-function EnemyIsInRange(range, from)
-	local from = from or myHero
-	return (#GetEnemiesInRange(range, from) > 0)
-end
-function GetPredictedHealth(unit, waittime)
-	local waittime = waittime or 0.2
-	if (waittime > 0) then
-		return Prediction:GetPredictedHealth(unit, waittime)
-	end
-	return unit.health
-end
+--]]
 
 function HasBlueBuff(unit)
 	return UnitHasBuff("crestoftheacientgolem", unit)
@@ -639,6 +754,12 @@ end
 function GetScreenPos(position)
 	return WorldToScreen(D3DXVECTOR3(position.x, position.y, position.z))
 end
+function PositionIsWall(pos1, pos2, pos3)
+	return IsWall((pos2 and pos3) and D3DXVECTOR3(pos1, pos2, pos3) or D3DXVECTOR3(pos1.x, pos1.y, pos1.z))
+end
+function PositionIsGrass(pos1, pos2, pos3)
+	return IsWallOfGrass((pos2 and pos3) and D3DXVECTOR3(pos1, pos2, pos3) or D3DXVECTOR3(pos1.x, pos1.y, pos1.z))
+end
 
 function CalcSpellDamage(target, spell)
 	local damage = 0
@@ -707,7 +828,8 @@ end
 function DrawSmartRectangleOutline(x, y, width, height, color, borderWidth)
 	DrawRectangleOutline(x, y, width, height, ParseColor(color, true), borderWidth or 1)
 end
-function DrawSmartCircle(x, y, z, range, color)
+function DrawSmartCircle(x, y, z, width, color)
+	if (not DrawingIsOnScreen(x, y, z, width)) then return end
 	local color = ParseColor(color, true)
 	local lowFps
 	if (DrawManager.Config) then
@@ -718,23 +840,21 @@ function DrawSmartCircle(x, y, z, range, color)
 		end
 	end
 	if (lowFps and lowFps.LFEnabled) then
-		if (IsOnScreen(VectorOut(Vector(x, y, z), range, cameraPos))) then
-			local quality = math.max(8, math.round(180 / math.deg(math.asin(lowFps.LFQuality / (2 * range)))))
-			quality = 2 * math.pi / quality
-			range = range * 0.92
-			local points = { }
-			for theta = 0, (2 * math.pi + quality), quality do
-				local point = WorldToScreen(D3DXVECTOR3(x + range * math.cos(theta), y, z - range * math.sin(theta)))
-				table.insert(points, D3DXVECTOR2(point.x, point.y))
-			end
-			DrawLines2(points, lowFps.LFWidth, color)
+		local quality = math.max(8, math.round(180 / math.deg(math.asin(lowFps.LFQuality / (2 * width)))))
+		quality = 2 * math.pi / quality
+		width = width * 0.92
+		local points = { }
+		for theta = 0, (2 * math.pi + quality), quality do
+			local point = WorldToScreen(D3DXVECTOR3(x + width * math.cos(theta), y, z - width * math.sin(theta)))
+			table.insert(points, D3DXVECTOR2(point.x, point.y))
 		end
+		DrawLines2(points, lowFps.LFWidth, color)
 	else
-		DrawCircle(x, y, z, range, color)
+		DrawCircle(x, y, z, width, color)
 	end
 end
-function DrawCircleAt(position, range, color)
-	DrawSmartCircle(position.x, position.y, position.z, range, color)
+function DrawCircleAt(position, width, color)
+	DrawSmartCircle(position.x, position.y, position.z, width, color)
 end
 function DrawTextWithBorder(text, size, x, y, color, borderColor, borderWidth)
 	local borderColor = borderColor or "Black"
@@ -811,6 +931,31 @@ function DrawSmartLine(pos1, pos2, color, width)
 	}
 	DrawLines2(spoints, width or 1, ParseColor(color, true))
 end
+function DrawSmartCircle3D(x, y, z, width, color, quality)
+	DrawCircle3D(x, y, z, width, ParseColor(color, true), quality or 1)
+end
+function DrawSmartCircle3DAt(pos, width, color, quality)
+	DrawSmartCircle3D(pos.x, pos.y, pos.z, width, color, quality)
+end
+function DrawSphere(x, y, z, color, size, steps, quality)
+	local size = size or 500
+	local step = size / (steps or 10)
+	local currentWidth = step
+	for i = 1, size, step do
+		DrawSmartCircle3D(x, y, z + i, currentWidth, color, quality)
+		if (currentWidth > size / 2) then
+			currentWidth = currentWidth - step
+		else
+			currentWidth = currentWidth + step
+		end
+	end
+end
+function DrawSphereAt(pos, color, size, steps, quality)
+	DrawSphere(pos.x, pos.y, pos.z, color, size, steps, quality)
+end
+function DrawingIsOnScreen(x, y, z, width)
+	return IsOnScreen(VectorOut(Vector(x, y, z), width, cameraPos))
+end
 
 ---//==================================================\\---
 --|| > ScriptInfo Class                                 ||--
@@ -824,7 +969,7 @@ function ScriptInfo:__init()
 	self.Variables = nil
 	self.Date = nil
 	self.LeagueVersion = nil
-	self.IsPotionScript = false
+	self.IsPotionsScript = false
 end
 function ScriptInfo:GetSetting(setting)
 	if (not self.Variables) then return false end
@@ -846,7 +991,6 @@ ScriptInfo = ScriptInfo()
 
 Class("Script")
 function Script:__init()
-	self.Save = { }
 	self.LoadMessages = { }
 	self.EnableDebugMode = false
 	self.DisableAutoUpdate = false
@@ -858,10 +1002,7 @@ function Script:__init()
 	self.LeagueVersion = string.match(GetGameVersion(), "<Releases/%d.%d%d>"):gsub("<Releases/", ""):gsub(">", "")
 end
 function Script:LoadSave(name)
-	self.Save = GetSave(name or ScriptInfo.Variables)
-	AddUnloadCallback(function()
-		self.Save:Save()
-	end)
+	return GetSave(name and ScriptInfo.Variables.."_"..name or ScriptInfo.Variables)
 end
 function Script:LoadUserSettings()
 	self.EnableDebugMode = ScriptInfo:GetSetting("EnableDebugMode")
@@ -874,6 +1015,7 @@ function Script:LoadUserSettings()
 	end
 	if (self.EnableDebugMode) then
 		PrintDebug = function(message) PrintLocal(message, MessageType.Debug) end
+		Assert = DAssert
 	end
 end
 function Script:LoadScriptStatusKey(key)
@@ -988,10 +1130,9 @@ RequiredLibraries = RequiredLibraries()
 
 Class("Orbwalker")
 function Orbwalker:__init()
-	self.__AddedOnProcessAttackSpellCallback = false
-	self.__SacAlerter = nil
+	self.__AddedProcessAttackCallback = false
 	self.Config = nil
-	self.SacFound = false
+	self.SacFound = _G.Reborn_Loaded
 	self.SacLoaded = false
 	self.AddedSacLoadMessage = false
 	self.Attacking = false
@@ -1008,7 +1149,7 @@ function Orbwalker:__init()
 		BeforeAttack = { },
 		OnAttack = { },
 		AfterAttack = { },
-		ProcessAttackSpell = { },
+		ProcessAttack = { },
 	}
 end
 function Orbwalker:__BeforeAttack(target)
@@ -1018,7 +1159,9 @@ function Orbwalker:__BeforeAttack(target)
 end
 function Orbwalker:__OnAttack(target)
 	self.Attacking = true
-	DelayAction(function() self.Attack = false end, ORBWALKER_ATTACK_RESET) -- Safety reset incase 'OnAfterAttack' doesn't get called.
+	DelayAction(function()
+		self.Attacking = false
+	end, ORBWALKER_ATTACK_RESET) -- Safety reset incase 'OnAfterAttack' doesn't get called.
 	for _, callback in ipairs(self.Callbacks.OnAttack) do
 		callback(target)
 	end
@@ -1040,12 +1183,12 @@ function Orbwalker:__InitSac(disableSacSpells)
 				self:__AfterAttack(target)
 			end, self.AttackWindUp + GetLatency() / 2000)
 		end)
-		self.__SacAlerter:Remove()
+		_G.GodLib_SacAlerter:Remove()
 		self.Ready = true
 		self.SacLoaded = true
 	else
-		if (not self.__SacAlerter) then
-			self.__SacAlerter = NotificationAlert("Waiting for SAC:R...")
+		if (not _G.GodLib_SacAlerter) then
+			_G.GodLib_SacAlerter = NotificationAlert("Waiting for SAC:R...")
 		end
 		DelayAction(function()
 			self:__InitSac(disableSacSpells)
@@ -1062,34 +1205,52 @@ function Orbwalker:Initialize(disableSacSpells)
 	else
 		self:__InitSac(disableSacSpells)
 	end
+	return self
 end
 function Orbwalker:GetAASpell()
-	return SpellData("AA", nil, "Auto-Attack", self:GetRange()):SetDamage(DamageType.Physical, 0, 0, DamageType.Physical, ScalingStat.AttackDamage, 1):SetIsReadyCallback(function() return self:CanAttack() end)
+	local spell = SpellData("AA", nil, "Auto-Attack", self:GetRange())
+	spell:SetDamage(DamageType.Physical, 0, 0, DamageType.Physical, ScalingStat.AttackDamage, 1)
+	spell:SetIsReadyCallback(function() return self:CanAttack() end)
+	return spell
 end
 function Orbwalker:AddBeforeAttackCallback(callback)
 	table.insert(self.Callbacks.BeforeAttack, callback)
+	return self
 end
-function Orbwalker:AddOnAttackCallback(callback)
+function Orbwalker:AddAttackCallback(callback)
 	table.insert(self.Callbacks.OnAttack, callback)
+	return self
 end
 function Orbwalker:AddAfterAttackCallback(callback)
 	table.insert(self.Callbacks.AfterAttack, callback)
+	return self
 end
-function Orbwalker:AddProcessAttackSpellCallback(callback)
-	if (not self.__AddedOnProcessAttackSpellCallback) then
+function Orbwalker:AddProcessAttackCallback(callback)
+	if (not self.__AddedProcessAttackCallback) then
+		AddProcessAttackCallback(function(unit, attack)
+			if (unit and unit.isMe) then
+				self.AttackWindUp = attack.windUpTime
+			end
+			for i = 1, #self.Callbacks.ProcessAttack do
+				self.Callbacks.ProcessAttack[i](unit, attack, attack.target)
+			end
+		end)
+		--[[ Old code.
 		AddProcessSpellCallback(function(unit, spell)
 			if (unit and spell.name:lower():find("attack")) then
 				if (unit.isMe) then
 					self.AttackWindUp = spell.windUpTime
 				end
-				for _, callback in ipairs(self.Callbacks.ProcessAttackSpell) do
+				for _, callback in ipairs(self.Callbacks.ProcessAttack) do
 					callback(unit, spell, spell.target)
 				end
 			end
 		end)
-		self.__AddedOnProcessAttackSpellCallback = true
+		--]]
+		self.__AddedProcessAttackCallback = true
 	end
-	table.insert(self.Callbacks.AddProcessAttackSpellCallback, callback)
+	table.insert(self.Callbacks.ProcessAttack, callback)
+	return self
 end
 function Orbwalker:LoadToConfig(config, onlySac)
 	local oconfig
@@ -1208,19 +1369,41 @@ function ModeHandler:LoadToConfig(config, combo, harass, lastHit, laneClear, jun
 		end)
 	else
 		config = config:Menu("Keys", "Script Key-Bindings")
+		local first = false
 		if (combo) then
+			first = true
 			config:Dynamic("Combo", "Combo Mode", SCRIPT_PARAM_ONKEYDOWN, false, 32)
 		end
 		if (harass) then
+			if (first) then
+				config:Separator()
+			else
+				first = true
+			end
 			config:Dynamic("Harass", "Harass Mode", SCRIPT_PARAM_ONKEYDOWN, false, "T")
 		end
 		if (lastHit) then
+			if (first) then
+				config:Separator()
+			else
+				first = true
+			end
 			config:Dynamic("LastHit", "Last-Hit Mode", SCRIPT_PARAM_ONKEYDOWN, false, "Z")
 		end
 		if (laneClear) then
+			if (first) then
+				config:Separator()
+			else
+				first = true
+			end
 			config:Dynamic("LaneClear", "Lane-Clear Mode", SCRIPT_PARAM_ONKEYDOWN, false, "C")
 		end
 		if (jungleClear) then
+			if (first) then
+				config:Separator()
+			else
+				first = true
+			end
 			config:Dynamic("Jungle", "Jungle Mode", SCRIPT_PARAM_ONKEYDOWN, false, "V")
 		end
 		self.Keys = config
@@ -1254,23 +1437,26 @@ ModeHandler = ModeHandler()
 
 Class("Prediction")
 function Prediction:__init()
-	self.AvailablePredictions = { "VPrediction" }
+	self.Config = nil
 	self.CurrentPrediction = 1
-	self.BasePred1 = nil
-	self.BasePred2 = nil
+	self.AvailablePredictions = { }
 	self.DPredTargets = { }
+	self.Base = {
+		["VPrediction"] = nil,
+		["DPrediction"] = nil,
+		["HPrediction"] = nil,
+		["SPrediction"] = nil,
+	}
 end
 function Prediction:__GetDPredTarget(target)
-	if (not DPTarget) then return nil end
 	if (not self.DPredTargets[target.networkID]) then
 		self.DPredTargets[target.networkID] = DPTarget(target)
 	end
 	return self.DPredTargets[target.networkID]
 end
 function Prediction:Initialize()
-	if (not VPrediction) then return end
-	if (FileExist(LIB_PATH.."DivinePred.lua") and FileExist(LIB_PATH.."DivinePred.luac")) then
-		table.insert(self.AvailablePredictions, "DivinePred")
+	if (FileExist(LIB_PATH.."VPrediction.lua")) then
+		table.insert(self.AvailablePredictions, "VPrediction")
 	end
 	if (FileExist(LIB_PATH.."HPrediction.lua")) then
 		table.insert(self.AvailablePredictions, "HPrediction")
@@ -1278,115 +1464,70 @@ function Prediction:Initialize()
 	if (FileExist(LIB_PATH.."SPrediction.lua")) then
 		table.insert(self.AvailablePredictions, "SPrediction")
 	end
-	if (not Script.Save.Prediction or (Script.Save.Prediction > #self.AvailablePredictions)) then Script.Save.Prediction = 1 end
-	self.CurrentPrediction = self.AvailablePredictions[Script.Save.Prediction]
-	self.BasePred1 = VPrediction()
-	if (self.CurrentPrediction == "DivinePred") then
-		require("DivinePred")
-		self.BasePred2 = DivinePred()
-	elseif (self.CurrentPrediction == "HPrediction") then
-		require("HPrediction")
-		self.BasePred2 = HPrediction()
-	elseif (self.CurrentPrediction == "SPrediction") then
-		require("SPrediction")
-		self.BasePred2 = SPrediction()
+	if (VIP_USER and FileExist(LIB_PATH.."DivinePred.lua") and FileExist(LIB_PATH.."DivinePred.luac")) then
+		table.insert(self.AvailablePredictions, "DivinePred")
 	end
+end
+function Prediction:GetActivePrediction()
+	return self.AvailablePredictions[self.CurrentPrediction]
 end
 function Prediction:GetPredictedHealth(unit, waittime)
-	if (not self.BasePred1) then return unit.health end
-	if (self.CurrentPrediction == "HPrediction") then
-		return self.BasePred2:PredictHealth(unit, waittime)
+	local waittime = waittime or 1
+	local activePrediction = self:GetActivePrediction()
+	if (activePrediction == "HPrediction") then
+		return self.Base.HPrediction:PredictHealth(unit, waittime)
+	elseif (self.Base.VPrediction) then
+		return self.Base.VPrediction:GetPredictedHealth(unit, waittime)
 	end
-	return self.BasePred1:GetPredictedHealth(unit, waittime)
+	return unit.health
 end
-function Prediction:GetPrediction(unit, spell, from, extraRange)
-	if (not unit) then return Vector(unit), Hitchance.None, Vector(unit) end
-	local range = spell.Range + (extraRange or 0)
-	local castPos, hitchance, pos = Vector(unit), Hitchance.None, Vector(unit)
-	if (self.CurrentPrediction == "VPrediction") then
-		if (spell.Type == SkillshotType.Linear) then
-			castPos, hitchance, pos = self.BasePred1:GetLineCastPosition(unit, spell.Delay, spell.Width, range, spell.Speed, from, spell.Collision)
-		elseif (spell.Type == SkillshotType.Circular) then
-			castPos, hitchance, pos = self.BasePred1:GetCircularCastPosition(unit, spell.Delay, spell.Width, range, spell.Speed, from, spell.Collision)
-		elseif (spell.Type == SkillshotType.Cone) then
-			castPos, hitchance, pos = self.BasePred1:GetConeAOECastPosition(unit, spell.Delay, spell.Width, range, spell.Speed, from, spell.Collision)
-		end
-	elseif (self.CurrentPrediction == "DivinePred") then
-		_, castPos, hitchance = self.BasePred2:predict(self:__GetDPredTarget(unit), spell.DSkillshot, self.Config.DPredPrecision or 1.2, Vector(from))
-		if (hitchance >= 70) then
-			hitchance = Hitchance.High
-		elseif (hitchance >= 40) then
-			hitchance = Hitchance.Medium
-		elseif (hitchance >= 1) then
-			hitchance = Hitchance.Low
-		else
-			hitchance = Hitchance.None
-		end
-	elseif (self.CurrentPrediction == "HPrediction") then
-		local stype = "DelayLine"
-		if (spell.Type == SkillshotType.Linear) then
-			if (spell.Speed == math.huge) then
-				stype = "PromptLine"
-			end
-		elseif (spell.Type == SkillshotType.Circular) then
-			if (spell.Speed == math.huge) then
-				stype = "PromptCircle"
-			else
-				stype = "DelayCircle"
-			end
-		end
-		local data = {
-			type = stype,
-			delay = spell.Delay,
-			range = range,
-		}
-		if (spell.Speed ~= math.huge) then
-			data.speed = spell.Speed
-		end
-		if (spell.Type == SkillshotType.Linear) then
-			data.width = spell.Width
-			if (spell.Collision) then
-				data.collisionM = true
-				data.collisionH = true
-			end
-		elseif (spell.Type == SkillshotType.Circular) then
-			data.radius = spell.Width / 2
-			data.addunitboundingRadius = true
-		else
-			data.width = spell.Width
-		end
-		if (spell.IsLowAccuracy) then
-			data.IsLowAccuracy = true
-		end
-		if (spell.IsVeryLowAccuracy) then
-			data.IsVeryLowAccuracy = true
-		end
-		castPos, hitchance = self.BasePred2:GetPredict(HPSkillshot(data), unit, from, spell.CollisionN)
+function Prediction:GetPrediction(unit, data, from)
+	local function CheckHitchance(hitchance)
 		if (hitchance >= 1.2) then
-			hitchance = Hitchance.High
+			return Hitchance.High
 		elseif (hitchance >= 0.6) then
-			hitchance = Hitchance.Medium
+			return Hitchance.Medium
 		elseif (hitchance > 0) then
-			hitchance = Hitchance.Low
-		else
-			hitchance = Hitchance.None
+			return Hitchance.Low
 		end
-	elseif (self.CurrentPrediction == "SPrediction") then
-		castPos, hitchance, pos = self.BasePred2:Predict(unit, range, spell.Speed, spell.Delay, spell.Width, spell.Collision, from)
+		return Hitchance.None
+	end
+	if (not unit) then return Vector(unit), Hitchance.None, Vector(unit) end
+	local from = from or myHero
+	local castPos, hitchance, pos = Vector(unit), Hitchance.None, Vector(unit)
+	local activePrediction = self:GetActivePrediction()
+	if (activePrediction == "VPrediction") then
+		if (data.Type == SkillshotType.Linear) then
+			castPos, hitchance, pos = self.Base.VPrediction:GetLineCastPosition(unit, data.Delay, data.Width, data.Range, data.Speed, from, data.Collision)
+		elseif (data.Type == SkillshotType.Circular) then
+			castPos, hitchance, pos = self.Base.VPrediction:GetCircularCastPosition(unit, data.Delay, data.Width, data.Range, data.Speed, from, data.Collision)
+		elseif (data.Type == SkillshotType.Cone) then
+			castPos, hitchance, pos = self.Base.VPrediction:GetConeAOECastPosition(unit, data.Delay, data.Width, data.Range, data.Speed, from, data.Collision)
+		end
+	elseif (activePrediction == "DivinePred") then
+		_, castPos, hitchance = self.Base.DPrediction:predict(self:__GetDPredTarget(unit), data:GetDSkillshot(), self.Config.DPredPrecision, Vector(from))
+		hitchance = CheckHitchance(hitchance)
+	elseif (activePrediction == "HPrediction") then
+		local hdata = data:GetHSkillshot()
+		castPos, hitchance = self.Base.HPrediction:GetPredict(HPSkillshot(hdata), unit, from, hdata.CollisionN)
+		hitchance = CheckHitchance(hitchance)
+	elseif (activePrediction == "SPrediction") then
+		castPos, hitchance, pos = self.Base.SPrediction:Predict(unit, data.Range, data.Speed, data.Delay, data.Width, data.Collision, from)
 	end
 	return castPos, hitchance, pos
 end
-function Prediction:GetAoePrediction(unit, spell, from)
+function Prediction:GetAoePrediction(unit, data, from)
+	local from = from or myHero
 	local points = { }
-	local castPos, hitchance, pos = self:GetPrediction(unit, spell, from)
+	local castPos, hitchance, pos = self:GetPrediction(unit, data, from)
 	local mainCastPos, mainHitchance, mainPos = castPos, hitchance, pos
 	table.insert(points, pos)
-	local enemies = GetEnemiesInRange(spell.Range * 1.5)
+	local enemies = GetEnemiesInRange(data.Range + data.Radius)
 	for i = 1, #enemies do
 		local enemy = enemies[i]
 		if (enemy.networkID ~= unit.networkID) then
-			castPos, hitchance, pos = self:GetPrediction(enemies[i])
-			if (InRange(pos, spell.Range + spell.Radius) and (hitchance >= Hitchance.Low)) then
+			castPos, hitchance, pos = self:GetPrediction(enemies[i], data, from)
+			if (InRange(pos, data.Range + data.Radius) and (hitchance >= Hitchance.Low)) then
 				table.insert(points, pos)
 			end
 		end
@@ -1394,7 +1535,7 @@ function Prediction:GetAoePrediction(unit, spell, from)
 	while (#points > 1) do
 		local mec = MEC(points)
 		local circle = mec:Compute()
-		if (circle.radius <= spell.Radius + self.BasePred1:GetHitBox(unit) - 8) then
+		if (circle.radius <= data.Radius + GetHitBox(unit) - 8) then
 			return circle.center, mainHitchance, #points
 		end
 		local maxDistance = -1
@@ -1410,49 +1551,64 @@ function Prediction:GetAoePrediction(unit, spell, from)
 	end
 	return mainCastPos, mainHitchance, #points
 end
-function Prediction:GetHit(position, spell, from)
+function Prediction:GetHit(position, data, from)
+	local from = from or myHero
 	local hit = { }
-	local enemies = GetEnemiesInRange(spell.Range * 1.5)
+	local enemies = GetEnemiesInRange(data.Range)
 	for i = 1, #enemies do
-		castPos, hitchance, pos = self:GetPrediction(enemies[i], spell, from)
-		if (InRange(pos, spell.Radius, position) and (hitchance >= Hitchance.Low)) then
+		castPos, hitchance, pos = self:GetPrediction(enemies[i], data, from)
+		if (InRange(pos, data.Radius, position) and (hitchance >= Hitchance.Low)) then
 			table.insert(hit, enemies[i])
 		end
 	end
 	return hit
 end
-function Prediction:CheckCollision(unit, spell, from, extraRange)
-	if (self.CurrentPrediction == "HPrediction") then
-		return self.BasePred2:CollisionStatus({
-			type = HSkillshot[spell.Type],
-			delay = spell.Delay,
-			speed = spell.Speed,
-			width = spell.Width,
-			range = spell.Range + (extraRange or 0),
-		}, unit, from or myHero, unit)
+function Prediction:CheckCollision(unit, data, from)
+	local from = from or myHero
+	local activePrediction = self:GetActivePrediction()
+	if (activePrediction == "HPrediction") then
+		return self.Base.HPrediction:CollisionStatus(data:GetHSkillshot(), unit, from, unit)
+	else
+		local castPos, hitchance, pos = self:GetPrediction(unit, data, from)
+		if (castPos and (hitchance >= Hitchance.Low)) then
+			return true
+		end
 	end
+	return false
 end
-function Prediction:GetPosition(unit, spell, from)
+function Prediction:GetPosition(unit, data, from)
+	local from = from or myHero
+	local activePrediction = self:GetActivePrediction()
 	local pos = unit.pos
-	if (self.CurrentPrediction == "VPrediction") then
-		_, _, pos = self.BasePred1:GetPredictedPos(unit, delay, speed, myHero, false)
-	elseif (self.CurrentPrediction == "DivinePred") then
-		_, _, pos = self:GetPrediction(unit)
-	elseif (self.CurrentPrediction == "HPrediction") then
-		_, _, pos = self:GetPrediction(unit)
-	elseif (self.CurrentPrediction == "SPrediction") then
-		pos, _ = self.BasePred2:PredictPos(unit, speed, delay)
+	if (activePrediction == "VPrediction") then
+		_, _, pos = self.Base.VPrediction:GetPredictedPos(unit, data.Delay, data.Speed, from, false)
+	elseif (activePrediction == "SPrediction") then
+		pos, _ = self.Base.SPrediction:PredictPos(unit, data.Speed, data.Delay)
+	else
+		_, _, pos = self:GetPrediction(unit, data, from)
 	end
 	return pos
 end
 function Prediction:LoadToConfig(config)
-	config:DropDown("Prediction", "Prediction to Use (Requires Reload)", 1, self.AvailablePredictions)
-	DelayAction(function() config.Prediction = Script.Save.Prediction end, 1)
-	if (self.CurrentPrediction == "DivinePred") then
+	if (#self.AvailablePredictions == 0) then return end
+	config:DropDown("CurrentPrediction", "Prediction to Use (Requires Reload)", self.CurrentPrediction, self.AvailablePredictions)
+	self.CurrentPrediction = config.CurrentPrediction
+	local activePrediction = self:GetActivePrediction()
+	if (activePrediction == "VPrediction") then
+		require("VPrediction")
+		self.Base.VPrediction = VPrediction()
+	elseif (activePrediction == "HPrediction") then
+		require("HPrediction")
+		self.Base.HPrediction = HPrediction()
+	elseif (activePrediction == "SPrediction") then
+		require("SPrediction")
+		self.Base.SPrediction = SPrediction()
+	elseif (activePrediction == "DivinePred") then
+		require("DivinePred")
+		self.Base.DPrediction = DivinePred()
 		config:Slider("DPredPrecision", "DivinePred Precision", 1.2, 1, 1.5, 1)
 	end
 	self.Config = config
-	AddUnloadCallback(function() Script.Save.Prediction = self.Config.Prediction end)
 end
 Prediction = Prediction()
 
@@ -1508,15 +1664,19 @@ function RecallTracker:Initialize()
 			end)
 		end
 	end)
+	return self
 end
 function RecallTracker:AddStartRecallCallback(callback)
 	table.insert(self.Callbacks.StartRecall, callback)
+	return self
 end
 function RecallTracker:AddCancelRecallCallback(callback)
 	table.insert(self.Callbacks.CancelRecall, callback)
+	return self
 end
 function RecallTracker:AddFinishRecallCallback(callback)
 	table.insert(self.Callbacks.FinishRecall, callback)
+	return self
 end
 RecallTracker = RecallTracker()
 
@@ -1639,14 +1799,21 @@ Class("DrawManager")
 function DrawManager:__init()
 	self.Config = nil
 end
-function DrawManager:LoadToConfig(config, noLowFps, sameConfig)
+function DrawManager:LoadToConfig(config, canDisable, noLowFps, sameConfig)
 	if (not sameConfig) then config:Separator() end
-	config:Toggle("Disabled", "Disable All Drawing", false)
-	local config = sameConfig and config or config:Menu("LowFps", "Low FPS Drawing Options")
-	if (sameConfig) then config:Separator() end
-	config:Toggle("LFEnabled", "Use Low FPS Drawing", false)
-	config:Slider("LFWidth", "Circle Width", 1, 1, 10)
-	config:Slider("LFQuality", "Circle Quality", 75, 75, 500)
+	if (canDisable == nil) then canDisable = true end
+	if (canDisable) then
+		config:Toggle("Disabled", "Disable All Drawing", false)
+	else
+		config.Disabled = false
+	end
+	if (not noLowFps) then
+		local config = sameConfig and config or config:Menu("LowFps", "Low FPS Drawing Options")
+		if (sameConfig and canDisable) then config:Separator() end
+		config:Toggle("LFEnabled", "Use Low FPS Drawing", false)
+		config:Slider("LFWidth", "Circle Width", 1, 1, 10)
+		config:Slider("LFQuality", "Circle Quality", 75, 75, 500)
+	end
 	self.Config = config
 end
 function DrawManager:CanDraw()
@@ -1667,6 +1834,7 @@ function Selector:__init()
 	self.SelectedTarget = nil
 	self.Mode = 1
 	self.Range = 1
+	self.Targets = { }
 	self.SelectorModes = { }
 	self.AllyCount = #GetAllyHeroes()
 	self.EnemyCount = #GetEnemyHeroes()
@@ -1690,8 +1858,8 @@ function Selector:__init()
 	}
 	self.PriorityTable = {
 		["ADC"] = { "Ashe", "Caitlyn", "Corki", "Draven", "Ezreal", "Graves", "Jayce", "Jinx", "KogMaw", "Lucian", "MasterYi", "MissFortune", "Pantheon", "Quinn", "Shaco", "Sivir", "Talon","Tryndamere", "Tristana", "Twitch", "Urgot", "Varus", "Vayne", "Yasuo","Zed" },
-		["APC"] = { "Annie", "Ahri", "Akali", "Anivia", "Annie", "Brand", "Cassiopeia", "Diana", "Evelynn", "FiddleSticks", "Fizz", "Gragas", "Heimerdinger", "Karthus", "Kassadin", "Katarina", "Kayle", "Kennen", "Leblanc", "Lissandra", "Lux", "Malzahar", "Mordekaiser", "Morgana", "Nidalee", "Orianna", "Ryze", "Sion", "Swain", "Syndra", "Teemo", "TwistedFate", "VelKoz", "Veigar", "Viktor", "Vladimir", "Xerath", "Ziggs", "Zyra" },
-		["Support"] = { "Alistar", "Blitzcrank", "Janna", "Karma", "Leona", "Lulu", "Nami", "Nunu", "Sona", "Soraka", "Taric", "Thresh", "Zilean", "Braum", "TahmKench" },
+		["APC"] = { "Azir", "Annie", "Ahri", "Akali", "Anivia", "Annie", "Brand", "Cassiopeia", "Diana", "Evelynn", "FiddleSticks", "Fizz", "Gragas", "Heimerdinger", "Karthus", "Kassadin", "Katarina", "Kayle", "Kennen", "Leblanc", "Lissandra", "Lux", "Malzahar", "Mordekaiser", "Morgana", "Nidalee", "Orianna", "Ryze", "Sion", "Swain", "Syndra", "Teemo", "TwistedFate", "VelKoz", "Veigar", "Viktor", "Vladimir", "Xerath", "Ziggs", "Zyra" },
+		["Support"] = { "Bard", "Alistar", "Blitzcrank", "Janna", "Karma", "Leona", "Lulu", "Nami", "Nunu", "Sona", "Soraka", "Taric", "Thresh", "Zilean", "Braum", "TahmKench" },
 		["Bruiser"] = { "Aatrox", "Darius", "Elise", "Fiora", "Gangplank", "Garen", "Gnar", "Irelia", "JarvanIV", "Jax", "Khazix", "LeeSin", "Nocturne", "Olaf", "Poppy", "Renekton", "Rengar", "Riven", "Rumble", "Shyvana", "Trundle", "Udyr", "Vi", "MonkeyKing", "XinZhao" },
 		["Tank"] = { "Amumu", "Chogath", "DrMundo", "Galio", "Hecarim", "Malphite", "Maokai", "Nasus", "Rammus", "Sejuani", "Nautilus", "Shen", "Singed", "Skarner", "Volibear", "Warwick", "Yorick", "Zac" }
 	}
@@ -1713,19 +1881,17 @@ function Selector:__init()
 	self:RegisterMode("NearMouse", "Near Mouse", function(a, b) return GetDistanceSqr(mousePos, a) < GetDistanceSqr(mousePos, b) end)
 end
 function Selector:__OnTargetSelected(target)
-	PrintLocal(Format("Selected target: {1}", unit.charName))
+	PrintLocal(Format("Selected target: {1}", target.charName))
 	for i = 1, #self.Callbacks.TargetSelected do
 		self.Callbacks.TargetSelected[i](target)
 	end
 end
 function Selector:__OnTargetDeselected(target)
-	PrintLocal(Format("De-selected target: {1}", unit.charName))
 	for i = 1, #self.Callbacks.TargetDeselected do
 		self.Callbacks.TargetDeselected[i](target)
 	end
 end
 function Selector:__OnTargetLost(target)
-	PrintLocal("Lost selected target: "..self.SelectedTarget.charName)
 	for i = 1, #self.Callbacks.TargetLost do
 		self.Callbacks.TargetLost[i](target)
 	end
@@ -1747,29 +1913,34 @@ function Selector:__OnWndMsg(message, key)
 		if (self.SelectedTarget and (self.SelectedTarget.charName == unit.charName)) then
 			self.SelectedTarget = nil
 			self:__OnTargetDeselected(unit)
+			PrintLocal(Format("De-selected target: {1}", unit.charName))
 		else
 			if (self.SelectedTarget) then self:__OnTargetLost(self.SelectedTarget) end
 			self.SelectedTarget = unit
 			self:__OnTargetSelected(unit)
+			PrintLocal(Format("Selected target: {1}", unit.charName))
 		end
 	end
 end
 function Selector:__OnTick()
 	if (self.SelectedTarget and (self.SelectedTarget.dead or not ValidTarget(self.SelectedTarget))) then
 		self:__OnTargetLost(self.SelectedTarget)
+		PrintLocal("Lost selected target: "..self.SelectedTarget.charName)
 		self.SelectedTarget = nil
 	end
 	if (myHero.dead) then
 		self.Target = nil
+		self.Targets = { }
 		Orbwalker:ForceTarget(nil)
-	else
-		self.Target = self:GetTarget(self.Range)
-		Orbwalker:ForceTarget(self.Target)
+		return
 	end
+	self.Targets = self:GetTargets()
+	self.Target = self:GetTarget()
+	Orbwalker:ForceTarget(self.Target)
 end
 function Selector:Initialize(mainMode, mainRange)
 	self.Mode = mainMode or 1
-	self.Range = mainRange or Orbwalker:GetRange()
+	self:SetRange(mainRange or Orbwalker:GetRange())
 	AddTickCallback(function() self:__OnTick() end)
 end
 function Selector:RegisterMode(id, name, sort)
@@ -1793,7 +1964,7 @@ function Selector:LoadToConfig(config)
 	for i = 1, #GetEnemyHeroes() do
 		local enemy = GetEnemyHeroes()[i]
 		enemyFound = true
-		config:Slider(enemy.charName, enemy.charName, self:GetPriority(enemy), 1, 5)
+		config:Slider(enemy.charName, enemy.charName, self:GetRecommendedPriority(enemy), 1, 5)
 	end
 	if (not enemyFound) then
 		config:Note("No enemies found.")
@@ -1801,7 +1972,10 @@ function Selector:LoadToConfig(config)
 	self.Config = config
 	AddMsgCallback(function(message, key) self:__OnWndMsg(message, key) end)
 end
-function Selector:GetPriority(unit, ally)
+function Selector:GetPriority(unit)
+	return self.Config and self.Config[unit.charName] or 1
+end
+function Selector:GetRecommendedPriority(unit, ally)
 	local name = unit.charName
 	local ally = ally or false
 	local count = ally and self.AllyCount or self.EnemyCount
@@ -1830,6 +2004,7 @@ function Selector:GetTarget(range, index, mode, enemies)
 end
 function Selector:GetTargets(range, mode, enemies)
 	local targets = { }
+	local range = range or self.Range
 	local enemies = enemies or GetEnemiesInRange(range)
 	for i = 1, #enemies do
 		if (IsValid(enemies[i], range)) then
@@ -1838,6 +2013,10 @@ function Selector:GetTargets(range, mode, enemies)
 	end
 	table.sort(targets, self.SelectorModes[mode or (self.Config and self.Config.Mode) or self.Mode].Sort)
 	return targets
+end
+function Selector:SetRange(range)
+	Assert(range and type(range) == "number", "number expected for <range>")
+	self.Range = range
 end
 Selector = Selector()
 
@@ -1951,20 +2130,53 @@ function AutoPotions:__init()
 	self.LastPotion = nil
 	self.Potions = { }
 end
+function AutoPotions:__OnTick()
+	if (myHero.dead) then
+		for _, potion in pairs(self.Potions) do
+			if (potion.Active) then
+				potion.Active = false
+				potion.EndTime = nil
+			end
+		end
+	else
+		for _, potion in pairs(self.Potions) do
+			if (potion.Active and (GetInGameTimer() >= potion.EndTime)) then
+				potion.Active = false
+				potion.EndTime = nil
+			end
+		end
+	end
+end
+function AutoPotions:__OnProcessSpell(unit, spell)
+	if (not unit or not unit.isMe) then return end
+	for _, potion in pairs(self.Potions) do
+		if (potion.RealName == spell.name) then
+			PrintDebug(Format("Casted {1}!", potion.Name))
+			potion.Active = true
+			potion.EndTime = GetInGameTimer() + potion.Duration
+			break
+		end
+	end
+end
 function AutoPotions:Initialize()
 	self:AddPotion("HP", "RegenerationPotion", "Health Potion")
 	self:AddPotion("MP", "FlaskOfCrystalWater", "Mana Potion")
-	self:AddPotion("Flask", "ItemCrystalFlask", "Flask")
+	self:AddPotion("Flask", "ItemCrystalFlask", "Flask", 12)
+	AddTickCallback(function() self:__OnTick() end)
+	AddProcessSpellCallback(function(unit, spell) self:__OnProcessSpell(unit, spell) end)
 end
-function AutoPotions:AddPotion(id, realName, name)
+function AutoPotions:AddPotion(id, realName, name, duration)
 	self.Potions[id] = {
 		ID = id,
 		RealName = realName,
 		Name = name,
+		Duration = duration or POTION_DURATION,
+		Active = false,
+		EndTime = nil,
 	}
 end
 function AutoPotions:LoadToConfig(config, autoCall)
-	if (_G.DevnsAutoPotions_Loaded and not Script.IsPotionScript) then
+	if (_G.DevnsAutoPotions_Loaded and not ScriptInfo.IsPotionsScript) then
 		config:Note("Devn's Auto-Potions is loaded!")
 		return
 	end
@@ -1988,50 +2200,60 @@ function AutoPotions:LoadToConfig(config, autoCall)
 	if (autoCall) then
 		AddTickCallback(function()
 			if (not myHero.dead) then
-				self:CastPotions()
+				self:Cast()
 			end
 		end)
 	end
 end
-function AutoPotions:CastPotions()
-	if (not self.Config) then return end
-	if (not self.Config.AutoUse) then return end
-	if (self.Config.ComboOnly and not (ModeHandler.Keys.Combo or ModeHandler.Keys.Harass)) then return end
-	if (self.LastPotion and (GetInGameTimer() < self.LastPotion + 2)) then return end
-	if (UnitHasBuff(self.Potions.Flask.RealName)) then return end
+function AutoPotions:Cast()
+	if (myHero.dead) then return nil, 0, nil end
+	if (not self.Config or not self.Config.AutoUse) then return nil, 0, nil end
+	if (self.Config.ComboOnly and not (ModeHandler.Keys.Combo or ModeHandler.Keys.Harass)) then return nil, 0, nil end
+	if (self.LastPotion and (GetInGameTimer() < self.LastPotion + 2)) then return nil, 0, nil end
+	if (self.Potions.Flask.Active) then return nil, 0, nil end
 	if (self.Config.HP and HealthUnderPercent(self.Config.HPHealth)) then
-		if (not UnitHasBuff(self.Potions.HP.RealName)) then
+		if (not self.Potions.HP.Active) then
 			local slot = GetItemSlot(self.Potions.HP.RealName)
 			if (slot and SpellIsReady(slot)) then
-				PrintDebug(Format("Auto-Potion => pot:HP slot:{1} health:{2}", tostring(slot - 5), myHero.health / myHero.maxHealth))
+				local percent = myHero.health / myHero.maxHealth
+				PrintDebug(Format("Auto-Potion => pot:HP slot:{1} health:{2}", tostring(slot - 5), percent))
 				CCastSpell(slot)
 				self.LastPotion = GetInGameTimer()
-				return
+				return Potions.Health, percent, Potions.Health
 			end
 		end
 	end
 	if (self.Config.MP and not HaveEnoughMana(self.Config.MPMana)) then
-		if (not UnitHasBuff(self.Potions.MP.RealName)) then
+		if (not self.Potions.MP.Active) then
 			local slot = GetItemSlot(self.Potions.MP.RealName)
 			if (slot and SpellIsReady(slot)) then
-				PrintDebug(Format("Auto-Potion => pot:MP slot:{1} mana:{2}", tostring(slot - 5), myHero.mana / myHero.maxMana))
+				local percent = myHero.mana / myHero.maxMana
+				PrintDebug(Format("Auto-Potion => pot:MP slot:{1} mana:{2}", tostring(slot - 5), percent))
 				CCastSpell(slot)
 				self.LastPotion = GetInGameTimer()
-				return
+				return Potions.Mana, percent, Potions.Mana
 			end
 		end
 	end
-	if (self.Config.Flask and (HealthUnderPercent(self.Config.FlaskHealth) or not HaveEnoughMana(self.Config.FlaskMana))) then
-		if (not UnitHasBuff(self.Potions.HP.RealName) and not UnitHasBuff(self.Potions.MP.RealName)) then
-			local slot = GetItemSlot(self.Potions.Flask.RealName)
-			if (slot and SpellIsReady(slot)) then
-				PrintDebug(Format("Auto-Potion => pot:Flask slot:{1} health:{2} mana:{3}", tostring(slot - 5), myHero.health / myHero.maxHealth, myHero.mana / myHero.maxMana))
+	if (self.Config.Flask) then
+		local slot = GetItemSlot(self.Potions.Flask.RealName)
+		if (slot and SpellIsReady(slot)) then
+			if (HealthUnderPercent(self.Config.FlaskHealth) and not self.Potions.HP.Active) then
+				local percent = myHero.health / myHero.maxHealth
+				PrintDebug(Format("Auto-Potion => pot:Flask slot:{1} health:{2}", tostring(slot - 5), percent))
 				CCastSpell(slot)
 				self.LastPotion = GetInGameTimer()
-				return
+				return Potions.Flask, percent, Potions.Health
+			elseif (not HaveEnoughMana(self.Config.FlaskMana) and not self.Potions.MP.Active) then
+				local percent = myHero.mana / myHero.maxMana
+				PrintDebug(Format("Auto-Potion => pot:Flask slot:{1} mana:{2}", tostring(slot - 5), percent))
+				CCastSpell(slot)
+				self.LastPotion = GetInGameTimer()
+				return Potions.Flask, percent, Potions.Mana
 			end
 		end
 	end
+	return nil, 0, nil
 end
 AutoPotions = AutoPotions()
 
@@ -2087,9 +2309,8 @@ function OffensiveItems:LoadToConfig(config, onlyCutlass)
 	items:Slider("Health", "Maximum Health Percent", 75, 0, 100)
 	items:Slider("TargetHealth", "Maximum Target Health Percent", 75, 0, 100)
 	items:Separator()
-	local itemslist = self.Items[self.ItemType.Offensive]
-	for i = 1, #itemslist do
-		local item = itemslist[i]
+	for i = 1, #self.Items do
+		local item = self.Items[i]
 		if (not onlyCutlass or (item.ID == "Botrk")) then
 			items:Toggle(item.ID, item.Name, true)
 		else
@@ -2260,7 +2481,7 @@ function AutoInterrupter:__OnTick()
 end
 function AutoInterrupter:__OnProcessSpell(unit, spell)
 	if (not self.Config.Enabled) then return end
-	if (IsEnemy(unit) and InterruptableSpells[spell.name]) then
+	if ((unit.team ~= myHero.team) and InterruptableSpells[spell.name]) then
 		local spellData = InterruptableSpells[spell.name]
 		if (self.Config[spell.name:gsub("_", "")]) then
 			local data = {
@@ -2278,6 +2499,9 @@ function AutoInterrupter:__OnInterruptableSpell(data)
 	for i = 1, #self.Callbacks do
 		self.Callbacks[i](data.Enemy, data)
 	end
+end
+function AutoInterrupter:Initialize()
+	return self
 end
 function AutoInterrupter:LoadToConfig(config)
 	local spellAdded = false
@@ -2452,11 +2676,11 @@ function Summoners:__init()
 end
 function Summoners:__OnTick()
 	if (myHero.dead) then
-		for _, summoner in pairs(self.Summoners) do
+		for _, summoner in pairs(self.List) do
 			summoner.Ready = false
 		end
 	else
-		for _, summoner in pairs(self.Summoners) do
+		for _, summoner in pairs(self.List) do
 			summoner.Ready = SpellIsReady(summoner.Slot)
 		end
 	end
@@ -2503,11 +2727,11 @@ function Summoners:LoadToConfig(config, autoCall)
 	if (not summoner1) then config:Note("No usable summoners were found!") end
 end
 function Summoners:Cast(name, unit)
-	CCastSpell(self.Summoners[name].Slot, unit)
-	self.Summoners[name].Ready = false
+	CCastSpell(self.List[name].Slot, unit)
+	self.List[name].Ready = false
 end
 function Summoners:IsReady(name)
-	return (self.Summoners[name] and self.Summoners[name].Ready)
+	return (self.List[name] and self.List[name].Ready)
 end
 function Summoners:Get(name)
 	return self.List[name]
@@ -2556,6 +2780,7 @@ end
 function AutoHeal:LoadToConfig(config, autoCall)
 	config:Toggle("Use", "Use "..SummonerSpell.Heal, false)
 	config:Slider("Health", "Health Percent", 35, 0, 100)
+	config:Separator()
 	config:Slider("Enemies", "Minimum Enemies Near", 1, 1, 5)
 	config:Slider("Range", "Range to Check for Enemies", DEF_VISION_RANGE, MIN_VISION_RANGE, MAX_VISION_RANGE)
 	self.Config = config
@@ -2585,6 +2810,7 @@ end
 function AutoBarrier:LoadToConfig(config, autoCall)
 	config:Toggle("Use", "Use "..SummonerSpell.Barrier, false)
 	config:Slider("Health", "Health Percent", 35, 0, 100)
+	config:Separator()
 	config:Slider("Enemies", "Minimum Enemies Near", 1, 1, 5)
 	config:Slider("Range", "Range to Check for Enemies", DEF_VISION_RANGE, MIN_VISION_RANGE, MAX_VISION_RANGE)
 	self.Config = config
@@ -2609,7 +2835,7 @@ function AutoIgnite:__init()
 	self.Config = nil
 end
 function AutoIgnite:Initialize()
-	self:Register(SummonerSpell.Ignite, "SummonerDot", 600)
+	Summoners:Register(SummonerSpell.Ignite, "SummonerDot", 600)
 end
 function AutoIgnite:LoadToConfig(config)
 	if (not Summoners:Has(SummonerSpell.Ignite)) then return end
@@ -2673,7 +2899,7 @@ function AutoSmite:__init()
 	self.Config = nil
 end
 function AutoSmite:Initialize()
-	self:Register("Smite", "SummonerSmite", 600)
+	Summoners:Register("Smite", "SummonerSmite", 600)
 end
 function AutoSmite:LoadToConfig(config)
 	if (not Summoners:Has(SummonerSpell.Smite)) then return end
@@ -2708,9 +2934,131 @@ function AutoCleanse:__init()
 	self.Config = nil
 end
 function AutoCleanse:Initialize()
-	self:Register("Cleanse", "SummonerCleanse")
+	Summoners:Register("Cleanse", "SummonerCleanse")
 end
 AutoCleanse = AutoCleanse()
+
+---//==================================================\\---
+--|| > Notifications Class                              ||--
+---\===================================================//---
+
+Class("Notifications") -- Credits to 'BlueCore'.
+function Notifications:__init()
+	self.Position = {
+		X = (WINDOW_W * 0.995),
+		Y = (WINDOW_H * 0.1),
+	}
+	self:__Initialize()
+end
+function Notifications:__OnDraw()
+	local timer = 0.5
+	local gametime = GetInGameTimer()
+	if (Count(_G.GodLib_Notifications) > self:GetMaxTileCount()) then
+		table.remove(_G.GodLib_Notifications, 1)
+	end
+	for i = 1, #_G.GodLib_Notifications do
+		local tile = _G.GodLib_Notifications[i]
+		if (tile) then
+			tile.X = self.Position.X
+			tile.Y = self.Position.Y + (NOTIFICATION_THICKNESS + 6) * (i - 1)
+			if (tile.Start + timer >= gametime) then
+				local percent = ((tile.Start + timer) - gametime) / timer
+				tile.X = self.Position.X + NOTIFICATION_LENGTH * percent
+			end
+			if ((tile.Duration + tile.Start <= gametime) and (tile.Duration + tile.Start + timer > gametime)) then
+				local percent = (gametime - (tile.Start + tile.Duration)) / timer
+				tile.X = self.Position.X + NOTIFICATION_LENGTH * percent
+			end
+			self:__DrawTile(tile.X, tile.Y, tile.Header, tile.Text)
+			if (tile.Start + tile.Duration + timer <= gametime) then
+				table.remove(_G.GodLib_Notifications, i)
+				i = i - 1
+			end
+		else
+			table.remove(_G.GodLib_Notifications, i)
+			i = i -1
+		end
+	end
+end
+function Notifications:__DrawTile(x, y, header, text)
+	local headerLength = GetTextArea(header, 25).x - 240
+	local contextLength = GetTextArea(text, 20).x - 250
+	local extraLength = (headerLength > contextLength) and headerLength or contextLength
+	local tileLength = self:CursorIsOverTile(x, y) and NOTIFICATION_LENGTH + (extraLength > 0 and extraLength or 0) or NOTIFICATION_LENGTH
+	local borderColor = self:CursorIsOverTile(x, y) and ARGB(255, 93, 86, 58) or ARGB(255 * 0.5, 93, 86, 58)
+	local borderThickness = 4
+	local borderOffsetY = (NOTIFICATION_THICKNESS * 0.5)
+	DrawLine(x - tileLength, y - borderOffsetY, x, y - borderOffsetY, borderThickness, borderColor)
+	DrawLine(x - tileLength, y + borderOffsetY, x, y + borderOffsetY, borderThickness, borderColor)
+	DrawLine(x - tileLength + (borderThickness * 0.5), y - borderOffsetY + (borderThickness * 0.5), x - tileLength + (borderThickness * 0.5), y + borderOffsetY - (borderThickness * 0.5), borderThickness, borderColor)
+	DrawLine(x - (borderThickness * 0.5), y - borderOffsetY + (borderThickness * 0.5), x - (borderThickness * 0.5), y + borderOffsetY - (borderThickness * 0.5), borderThickness, borderColor)
+	local mainColor = self:CursorIsOverTile(x, y) and ARGB(255, 12, 19, 18) or ARGB(255 * 0.5, 12, 19, 18)
+	local mainBorderOffset = (borderThickness * 0.5)
+	DrawLine(x - tileLength + borderThickness, y, x - borderThickness, y, NOTIFICATION_THICKNESS - borderThickness, mainColor)
+	local boxYOffset = NOTIFICATION_THICKNESS * 0.5 - 24 * 0.5
+	if (self:CursorIsOverBox(x, y)) then
+		DrawLine(x - 24 - borderThickness, y - boxYOffset + mainBorderOffset, x - borderThickness, y - boxYOffset + mainBorderOffset, 24, ARGB(255, 35, 65, 63))
+	end
+	local fixedHeader = (not self:CursorIsOverTile(x, y) and GetTextArea(header, 25).x > 240) and header:sub(1, 20).." ..." or header
+	DrawText(fixedHeader, 25, x - tileLength + borderThickness * 2, y - 30, ARGB(255, 127, 255, 212))
+	local fixedContext = (not self:CursorIsOverTile(x, y) and GetTextArea(text, 20).x > 250) and text:sub(1, 25).." ..." or text
+	DrawText(fixedContext, 20, x - tileLength + borderThickness * 2, y + 5, ARGB(255, 250, 235, 215))
+	DrawText("x", 33, x - 24, y - boxYOffset * 2 + 5, ARGB(255, 143, 188, 143))
+end
+function Notifications:__OnWndMsg(message, param)
+	if (message ~= 513) then return end
+	for i = 1, #_G.GodLib_Notifications do
+		local tile = _G.GodLib_Notifications[i]
+		if (tile) then
+			if (self:CursorIsOverBox(tile.X, tile.Y)) then
+				tile.Duration = GetInGameTimer() - tile.Start
+			end
+		else
+			table.remove(_G.GodLib_Notifications, i)
+			i = i -1
+		end
+	end
+end
+function Notifications:__Initialize()
+	if (_G.GodLib_Notifications_Initialized) then return end
+	_G.GodLib_Notifications = { }
+	AddDrawCallback(function() self:__OnDraw() end)
+	AddMsgCallback(function(message, param) self:__OnWndMsg(message, param) end)
+	_G.GodLib_Notifications_Initialized = true
+end
+function Notifications:Show(header, text, duration)
+	local index = #_G.GodLib_Notifications + 1
+	table.insert(_G.GodLib_Notifications, {
+		Header = header,
+		Text = text,
+		Duration = duration or 5,
+		Start = GetInGameTimer(),
+		X = self.Position.X,
+		Y = self.Position.Y,
+	})
+	return {
+		Remove = function()
+			table.remove(_G.GodLib_Notifications, index)
+			-- _G.GodLib_Notifications[index].Start = GetInGameTimer() - _G.GodLib_Notifications[index].Duration
+		end,
+	}
+end
+function Notifications:GetMaxTileCount()
+	return Round((WINDOW_H / 108), 0)
+end
+function Notifications:CursorIsOverTile(posX, posY)
+	local cursor = GetCursorPos()
+	local x = posX - cursor.x
+	local y = posY - cursor.y
+	return (x < NOTIFICATION_LENGTH and x > 0) and (y < 30 and y > -45)
+end
+function Notifications:CursorIsOverBox(posX, posY)
+	local cursor = GetCursorPos()
+	local x = posX - cursor.x
+	local y = posY - cursor.y
+	return (x < 28 and x > 0) and (y < 24 and y > -10)
+end
+Notifications = Notifications()
 
 ---//==================================================\\---
 --|| > Alerter Class                                    ||--
@@ -2878,7 +3226,10 @@ function SpellData:__init(id, key, name, range)
 	self.Name = Format("{1} ({2})", name, self.ID)
 	self.Mana = 0
 	self.BaseRange = range or 0
+	self.Range = self.BaseRange
 	self.BaseWidth = 0
+	self.Width = 0
+	self.Hitchance = Hitchance.Medium
 	self.IsReadyCallback = function(self)
 		if (self.Key) then
 			return (SpellIsReady(self.Key) or ((self:GetCurrentCooldown() <= GetRealLatency() * 2) and (self:GetLevel() > 0) and self:HaveEnoughMana()))
@@ -2897,23 +3248,36 @@ function SpellData:__init(id, key, name, range)
 	self:SetAccuracy(SpellAccuracy.Normal)
 	self:SetDamage(DamageType.True, 0, 0, DamageType.True, ScalingStat.AttackDamage, 0)
 end
-function SpellData:GetPrediction(unit, extraRange)
-	return Prediction:GetPrediction(unit, self, myHero, extraRange)
+function SpellData:SetHitchance(hitchance)
+	self.Hitchance = hitchance
+end
+function SpellData:GetPrediction(unit)
+	return Prediction:GetPrediction(unit, self:GetPredData(), myHero)
 end
 function SpellData:GetAoePrediction(unit)
-	return Prediction:GetAoePrediction(unit, self, myHero)
+	return Prediction:GetAoePrediction(unit, self:GetPredData(), myHero)
 end
 function SpellData:GetHit(position)
-	return Prediction:GetHit(position, self, myHero)
+	return Prediction:GetHit(position, self:GetPredData(), myHero)
 end
 function SpellData:SetRange(range)
 	self.BaseRange = range or 0
-	self:Update(0, 0)
+	self.Range = self.BaseRange
+	return self
+end
+function SpellData:UpdateRange(modifier)
+	self.Range = self.BaseRange + modifier
 	return self
 end
 function SpellData:SetWidth(width)
-	self.BaseWidth = width
-	self:Update(0, 0)
+	self.BaseWidth = width or 0
+	self.Width = self.BaseWidth
+	self.Radius = self.Width / 2
+	return self
+end
+function SpellData:UpdateWidth(modifier)
+	self.Width = self.BaseWidth + modifier
+	self.Radius = self.Width / 2
 	return self
 end
 function SpellData:SetAccuracy(accuracy)
@@ -2955,16 +3319,6 @@ function SpellData:SetSkillshot(width, delay, speed, collision, skillshotType)
 			self.CollisionN = collision
 		end
 	end
-	if ((Prediction.CurrentPrediction == "DivinePred") and (self.Type >= SkillshotType.Linear)) then
-		local delay = self.Delay * 1000
-		if (self.Type == SkillshotType.Linear) then
-			self.DSkillshot = LineSS(self.Speed, self.Range, self.Radius, delay, self.CollisionN)
-		elseif (self.Type == SkillshotType.Circular) then
-			self.DSkillshot = CircleSS(self.Speed, self.Range, self.Radius, delay, self.CollisionN)
-		elseif (self.Type == SkillshotType.Cone) then
-			self.DSkillshot = ConeSS(self.Speed, self.Range, self.Radius, delay, self.CollisionN)
-		end
-	end
 	return self
 end
 function SpellData:SetDamage(damageType, baseDamage, perLevelDamage, scalingType, scalingStat, scalingPercent)
@@ -2987,15 +3341,6 @@ function SpellData:Copy(id, key)
 	spell.Damage = self.Damage
 	return spell
 end
-function SpellData:Update(rangeModifier, widthModifier)
-	self.Range = self.BaseRange + rangeModifier
-	self.Width = self.BaseWidth + widthModifier
-	self.Radius = self.Width / 2
-	if (self.DSkillshot) then
-		self.DSkillshot.range = self.Range
-		self.DSkillshot.radius = self.Radius
-	end
-end
 function SpellData:IsReady()
 	self.Ready = self:IsReadyCallback()
 	return self.Ready
@@ -3015,15 +3360,15 @@ function SpellData:Cast(posX, posZ)
 	return true
 end
 function SpellData:CastAt(pos)
+	Assert(pos and VectorType(pos), "vector expected for <pos>")
 	return self:Cast(pos.x, pos.z)
 end
 function SpellData:VectorCast(pos)
 	return self:CastAt(self:VectorTo(pos))
 end
 function SpellData:PredictedVectorCast(unit, minHitchance)
-	local minHitchance = minHitchance or Hitchance.Medium
 	local castPos, hitchance = self:GetPosition(unit)
-	if (castPos and (hitchance >= minHitchance)) then
+	if (castPos and (hitchance >= minHitchance or self.Hitchance)) then
 		return self:VectorCast(castPos)
 	end
 	return false
@@ -3075,7 +3420,9 @@ function SpellData:InRange(pos, extra)
 	return InRange(pos, self.Range + extra)
 end
 function SpellData:PredictedCast(unit, minHitchance)
-	local minHitchance = minHitchance or Hitchance.Medium
+	Assert(unit and type(unit.charName) == "string", "hero expected for <unit>")
+	Assert(not minHitchance or type(minHitchance) == "number", "number expected fpr <minHitchance>")
+	local minHitchance = minHitchance or self.Hitchance
 	local castPos, hitchance = self:GetPrediction(unit)
 	if (castPos and (hitchance >= minHitchance)) then
 		return self:CastAt(castPos)
@@ -3083,10 +3430,8 @@ function SpellData:PredictedCast(unit, minHitchance)
 	return false
 end
 function SpellData:PredictedAoeCast(unit, minHitchance, minHit)
-	local minHitchance = minHitchance or Hitchance.Medium
-	local minHit = minHit or 1
 	local castPos, hitchance, hit = self:GetAoePrediction(unit)
-	if (castPos and (hitchance >= minHitchance) and (hit >= minHit)) then
+	if (castPos and (hitchance >= minHitchance or self.Hitchance) and (hit >= minHit or 1)) then
 		return self:CastAt(castPos)
 	end
 	return false
@@ -3157,6 +3502,94 @@ function SpellData:AutoTrack()
 	end)
 	return self
 end
+function SpellData:GetPredData()
+	return PredData(self.Speed, self.Delay, self.Range, self.Width, self.CollisionN, self.IsAoe, self.Type)
+end
+function SpellData:GetPredictedHealth(unit)
+	return Prediction:GetPredictedHealth(unit, self.Delay + GetDistance(myHero, unit) / self.Speed - GetRealLatency())
+end
+
+---//==================================================\\---
+--|| > PredData Class									||--
+---\===================================================//---
+
+Class("PredData")
+function PredData:__init(speed, delay, range, width, collision, aoe, type)
+	self.Speed = speed or 0
+	self.Delay = delay or 0
+	self.Width = width or 0
+	self.Radius = Divide(self.Width, 2)
+	self.IsAoe = aoe or false
+	self.Type = type or SkillshotType.Linear
+	self:SetRange(range)
+	self:SetCollision(collision)
+end
+function PredData:SetRange(range)
+	self.Range = (range or 0) * 1.5
+end
+function PredData:SetCollision(collision)
+	local collision = collision or math.huge
+	if (type(collision) == "number") then
+		self.CollisionN = collision
+		if (collision < math.huge) then
+			self.Collision = true
+		else
+			self.Collision = false
+		end
+	else
+		self.Collision = collision
+		if (collision) then
+			self.CollisionN = 0
+		else
+			self.CollisionN = math.huge
+		end
+	end
+end
+function PredData:GetDSkillshot()
+	local delay = self.Delay * 1000
+	if (self.Type == SkillshotType.Circular) then
+		return CircleSS(self.Speed, self.Range, self.Radius, delay, self.CollisionN)
+	elseif (self.Type == SkillshotType.Cone) then
+		return ConeSS(self.Speed, self.Range, self.Radius, delay, self.CollisionN)
+	else
+		return LineSS(self.Speed, self.Range, self.Radius, delay, self.CollisionN)
+	end
+end
+function PredData:GetHSkillshot()
+	local stype = "DelayLine"
+	if (self.Type == SkillshotType.Linear) then
+		if (self.Speed == math.huge) then
+			stype = "PromptLine"
+		end
+	elseif (self.Type == SkillshotType.Circular) then
+		if (self.Speed == math.huge) then
+			stype = "PromptCircle"
+		else
+			stype = "DelayCircle"
+		end
+	end
+	local data = {
+		type = stype,
+		delay = self.Delay,
+		range = self.Range,
+		speed = (self.Speed == math.huge) and nil or self.Speed,
+		IsLowAccuracy = self.IsLowAccuracy and true or nil,
+		IsVeryLowAccuracy = self.IsVeryLowAccuracy and true or nil,
+	}
+	if (self.Type == SkillshotType.Linear) then
+		data.width = self.Width
+		if (self.Collision) then
+			data.collisionM = true
+			data.collisionH = true
+		end
+	elseif (self.Type == SkillshotType.Circular) then
+		data.radius = self.Width / 2
+		data.addunitboundingRadius = true
+	else
+		data.width = self.Width
+	end
+	return data
+end
 
 ---//==================================================\\---
 --|| > MenuConfig Class                                 ||--
@@ -3184,6 +3617,9 @@ function scriptConfig:Note2(note)
 	self:addParam("nil", note, SCRIPT_PARAM_INFO, "")
 end
 function scriptConfig:Toggle(name, title, default)
+	Assert(name and type(name) == "string", "string expected for <name>")
+	Assert(title and type(title) == "string", "string expected for <title>")
+	Assert(default == nil or type(default) == "boolean", "nil or boolean expected for <default>")
 	self:addParam(name, title, SCRIPT_PARAM_ONOFF, default)
 	return { SetCallback = function(_, callback) self:SetCallback(name, callback) end }
 end
