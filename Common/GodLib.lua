@@ -5,8 +5,8 @@
 ---\\==================================================//---
 
 	Library:    GodLib
-	Version:    3.01
-	Build Date: 2015-10-16
+	Version:    3.02
+	Build Date: 2015-10-31
 	Author:     Devn
 
 ---//==================================================\\---
@@ -33,6 +33,16 @@
 		- Added 'Selector.Targets' table.
 		- Removed 'SpellData.Update' function.
 		- Added 'SpellData.UpdateRange' and 'SpellData.UpdateWidth'.
+		
+	Version 3.02:
+		- Added 'SplitText' function.
+		- Added 'GetRandom' function.
+		- Fixed Auto-Ignite.
+		- Changed VPrediction.
+		- Changed HPrediction.
+		- Changed SPrediction.
+		- Temporarily removed DPrediction.
+		- Added more drawing functions.
 
 --]]
 
@@ -40,7 +50,7 @@
 --|| > Script Variables                                 ||--
 ---\===================================================//---
 
-LIB_VERSION = 3.01
+LIB_VERSION = 3.02
 
 UPDATE_SAFE_TIMER = 180 -- Script will stop attempting to update after this time (ms) has passed in-game.
 ORBWALKER_ATTACK_RESET = 2 -- Orbwalker 'Attacking' variable will be reset after this time incase 'OnAfterAttack' doesn't get called.
@@ -86,6 +96,7 @@ SkillshotType = {
 	Linear = 2,
 	Circular = 3,
 	Cone = 4,
+	Arc = 5,
 }
 DamageType = {
 	Magic = 1,
@@ -103,6 +114,7 @@ ScalingStat = {
 	MaxMana = 8,
 }
 Hitchance = {
+	Collision = -1,
 	None = 0,
 	Low = 1,
 	Medium = 2,
@@ -216,11 +228,6 @@ local InterruptableSpells = {
 	["FallenOne"] = { charName = "Karthus", DangerLevel = 5, MaxDuration = 2.5, CanMove = false },
 	["AlZaharNetherGrasp"] = { charName = "Malzahar", DangerLevel = 5, MaxDuration = 2.5, CanMove = false },
 	["Pantheon_GrandSkyfall_Jump"] = { charName = "Pantheon", DangerLevel = 5, MaxDuration = 2.5, CanMove = false },
-}
-local VSkillshot = {
-	[SkillshotType.Linear] = "line",
-	[SkillshotType.Circular] = "circle",
-	[SkillshotType.Cone] = "cone",
 }
 
 ---//==================================================\\---
@@ -352,9 +359,6 @@ function ParseColor(color, argb, alpha)
 	local argb = argb or false
 	local alpha = alpha or 255
 	local color = color or { alpha, 255, 255, 255 }
-	if (type(color) == "number") then
-		print("color: "..tostring(color))
-	end
 	if ((type(color) == "string") and ColorValues[color]) then
 		local value = ColorValues[color]
 		if (not argb) then
@@ -372,6 +376,35 @@ end
 function Round(num, idp)
 	local mult = 10^(idp or 0)
 	return math.floor(num * mult + 0.5) / mult
+end
+function SplitText(text, maxLength)
+	local charsInLine = 0
+	local output = { }
+	for word in text:gmatch("%S+") do
+		if ((#output == 0) or (charsInLine + #word + 1 >= maxLength)) then
+			table.insert(output, word)
+			charsInLine = #word
+		else
+			output[#output] = output[#output].." "..word
+			charsInLine = charsInLine + #word + 1
+		end
+	end
+	return output
+end
+function GetRandom(minNumber, maxNumber, loops)
+	local loops = loops or 5
+	math.randomseed(os.time())
+	for i = 1, loops do
+		math.random()
+	end
+	return math.random(minNumber, maxNumber)
+end
+function StringStartsWith(text, start, exact)
+	if (not exact) then
+		text = text:lower()
+		start = start:lower()
+	end
+	return (text:sub(1, start:len()) == start)
 end
 
 function PrintLocal(text, messageType, showName)
@@ -543,27 +576,6 @@ function IsValid(target, range, from)
 	end
 	return false
 end
-function GetBarInfo(unit)
-    local barPos = GetUnitHPBarPos(unit)
-    local barOffset = GetUnitHPBarOffset(unit)
-    local offsetX = {
-        ["Darius"] = -0.05,
-        ["Renekton"] = -0.05,
-        ["Sion"] = -0.05,
-        ["Thresh"] = -0.03,
-    }
-    local offsetY = {
-        ["XinZhao"] = 1,
-        ["Velkoz"] = -2.65,
-    }
-	if (offsetX[unit.charName]) then
-		barOffset.x = offsetX[unit.charName]
-	end
-	if (offsetY[unit.charName]) then
-		barOffset.y = offsetY[unit.charName]
-	end
-    return D3DXVECTOR2(barPos.x + barOffset.x * 150 - 70, barPos.y + barOffset.y * 50 + 13)
-end
 function IsEvading()
 	return (_G.Evadeee_evading or (_G.EzEvade and _G.EzEvade.Evading) or _G.Evading or _G.evade)
 end
@@ -586,10 +598,9 @@ function GetPredictedHealth(unit, waittime)
 	return unit.health
 end
 function GetHitBox(unit)
+	local unit = unit or myHero
 	return unit.boundingRadius or 65
 end
-
---[[ Old HP bar functions.
 function GetBarInfo(unit)
 	local pos, ccd
 	if (unit.type == myHero.type) then
@@ -641,7 +652,7 @@ function GetBarInfo(unit)
 		dcd = 92
 	end
 	if (unit.isMe) then
-		pos.x = pos.x + 25
+		--pos.x = pos.x + 25
 	end
 	return pos, dcd, _dd
 end
@@ -663,6 +674,29 @@ function GetHPBarPos2(unit)
 	local vec1 = Vector(pos.x, pos.y, 0)
 	local vec2 = Vector(pos.x + 108, pos.y, 0)
 	return Vector(vec1.x, vec1.y, 0), Vector(vec2.x, vec2.y, 0)
+end
+
+--[[ New GetBarInfo
+function GetBarInfo(unit)
+    local barPos = GetUnitHPBarPos(unit)
+    local barOffset = GetUnitHPBarOffset(unit)
+    local offsetX = {
+        ["Darius"] = -0.05,
+        ["Renekton"] = -0.05,
+        ["Sion"] = -0.05,
+        ["Thresh"] = -0.03,
+    }
+    local offsetY = {
+        ["XinZhao"] = 1,
+        ["Velkoz"] = -2.65,
+    }
+	if (offsetX[unit.charName]) then
+		barOffset.x = offsetX[unit.charName]
+	end
+	if (offsetY[unit.charName]) then
+		barOffset.y = offsetY[unit.charName]
+	end
+    return D3DXVECTOR2(barPos.x + barOffset.x * 150 - 70, barPos.y + barOffset.y * 50 + 13)
 end
 --]]
 
@@ -717,6 +751,11 @@ function VectorOut(position, distance, from)
 	local from = Vector(from or myHero)
 	return from + (Vector(position) - from):normalized() * distance
 end
+function VectorTo(position, maxDistance, from)
+	local distance = GetDistance(position)
+	local range = (distance > maxDistance) and maxDistance or distance
+	return VectorOut(position, range)
+end
 function FindBush(x, y, z, distance, range)
 	local pos = { x = x, z = z }
 	local distance = distance and math.floor(distance / range) or VisionRange
@@ -759,6 +798,9 @@ function PositionIsWall(pos1, pos2, pos3)
 end
 function PositionIsGrass(pos1, pos2, pos3)
 	return IsWallOfGrass((pos2 and pos3) and D3DXVECTOR3(pos1, pos2, pos3) or D3DXVECTOR3(pos1.x, pos1.y, pos1.z))
+end
+function DrawingIsOnScreen(x, y, z, width)
+	return IsOnScreen(VectorOut(Vector(x, y, z), width, cameraPos))
 end
 
 function CalcSpellDamage(target, spell)
@@ -822,25 +864,62 @@ function DrawSmartText(text, size, x, y, color, halign, valign)
 		DrawText(text, size, x, y, color)
 	end
 end
+function DrawTextAt(text, size, pos, color, halign, valign)
+	DrawSmartText(text, size, pos.x, pos.y, color, halign, valign)
+end
+function DrawTextWithBorder(text, size, x, y, color, borderColor, borderWidth)
+	local borderColor = borderColor or "Black"
+	local borderWidth = borderWidth or 1
+	DrawSmartText(text, size, x + borderWidth, y, borderColor)
+	DrawSmartText(text, size, x - borderWidth, y, borderColor)
+	DrawSmartText(text, size, x, y - borderWidth, borderColor)
+	DrawSmartText(text, size, x, y + borderWidth, borderColor)
+	DrawSmartText(text, size, x, y, color)
+end
+function DrawTextWithBorderAt(text, size, pos, color, borderColor, borderWidth)
+	DrawTextWithBorder(text, size, pos.x, pos.z, color, borderColor, borderWidth)
+end
+function DrawSmartText3D(text, x, y, z, size, color, center)
+	DrawText3D(text, x, y, z, size, ParseColor(color, true), center)
+end
+function DrawSmartText3DAt(text, pos, size, color, center)
+	DrawSmartText3D(text, pos.x, pos.y, pos.z, size, color, center)
+end
+
 function DrawSmartRectangle(x, y, width, height, color)
 	DrawRectangle(x, y, width, height, ParseColor(color, true))
+end
+function DrawRectangleAt(pos, width, height, color)
+	DrawSmartRectangle(pos.x, pos.y, width, height, color)
 end
 function DrawSmartRectangleOutline(x, y, width, height, color, borderWidth)
 	DrawRectangleOutline(x, y, width, height, ParseColor(color, true), borderWidth or 1)
 end
-function DrawSmartCircle(x, y, z, width, color)
+function DrawRectangleOutlineAt(pos, width, height, color, borderWidth)
+	DrawSmartRectangleOutline(pos.x, pos.y, width, height, color, borderWidth)
+end
+
+function DrawSmartCircle(x, y, z, width, color, drawLowFps, quality)
 	if (not DrawingIsOnScreen(x, y, z, width)) then return end
 	local color = ParseColor(color, true)
-	local lowFps
-	if (DrawManager.Config) then
+	local lowFps = false
+	if (drawLowFps) then
+		lowFps = true
+	elseif (DrawManager.Config) then
 		if (DrawManager.Config.LowFps) then
-			lowFps = DrawManager.Config.LowFps
+			lowFps = DrawManager.Config.LowFps.LFEnabled
+			if (not quality) then
+				quality = DrawManager.Config.LowFps.LFQuality
+			end
 		else
-			lowFps = DrawManager.Config
+			lowFps = DrawManager.Config.LFEnabled
+			if (not quality) then
+				quality = DrawManager.Config.LFQuality
+			end
 		end
 	end
-	if (lowFps and lowFps.LFEnabled) then
-		local quality = math.max(8, math.round(180 / math.deg(math.asin(lowFps.LFQuality / (2 * width)))))
+	if (lowFps) then
+		local quality = math.max(8, math.round(180 / math.deg(math.asin(quality / (2 * width)))))
 		quality = 2 * math.pi / quality
 		width = width * 0.92
 		local points = { }
@@ -856,15 +935,83 @@ end
 function DrawCircleAt(position, width, color)
 	DrawSmartCircle(position.x, position.y, position.z, width, color)
 end
-function DrawTextWithBorder(text, size, x, y, color, borderColor, borderWidth)
-	local borderColor = borderColor or "Black"
-	local borderWidth = borderWidth or 1
-	DrawSmartText(text, size, x + borderWidth, y, borderColor)
-	DrawSmartText(text, size, x - borderWidth, y, borderColor)
-	DrawSmartText(text, size, x, y - borderWidth, borderColor)
-	DrawSmartText(text, size, x, y + borderWidth, borderColor)
-	DrawSmartText(text, size, x, y, color)
+function DrawSmartCircle2D(x, y, radius, width, color, quality)
+	DrawCircle2D(x, y, radius, width, ParseColor(color, true), quality)
 end
+function DrawCircle2DAt(pos, radius, width, color, quality)
+	DrawSmartCircle2D(pos.x, pos.y, radius, width, color, quality)
+end
+function DrawSmartCircle3D(x, y, z, radius, width, color, quality)
+	DrawCircle3D(x, y, z, radius, width, ParseColor(color, true), quality)
+end
+function DrawCircle3DAt(pos, radius, width, color, quality)
+	DrawSmartCircle3D(pos.x, pos.y, pos.z, radius, width, color, quality)
+end
+
+--[[ Sphere drawing.
+function DrawSmartSphere(x, y, z, color, radius, width, steps, quality)
+	local radius = radius or 250
+	local maxSteps = steps or 10
+	local stepSize = radius / maxSteps
+	local passedHalf = false
+	local currentRadius = stepSize
+	for i = 1, radius * 2, stepSize do
+		local y1 = y + i
+		local y2 = y
+		DrawSmartCircle3D(x, y1, z, math.sqrt(posY - 2, 2), width, color, quality)
+		if (passedHalf or (currentRadius > radius)) then
+			passedHalf = true
+			currentRadius = currentRadius - stepSize
+		else
+			currentRadius = currentRadius + stepSize
+		end
+	end
+end
+function DrawSphereAt(pos, color, radius, width, size, steps, quality)
+	DrawSmartSphere(pos.x, pos.y, pos.z, color, size, steps, quality)
+end
+--]]
+
+function DrawSmartLine(pos1, pos2, color, width)
+	local wpoints = {
+		[1] = WorldToScreen(D3DXVECTOR3(pos1.x, pos1.y, pos1.z)),
+		[2] = WorldToScreen(D3DXVECTOR3(pos2.x, pos1.y, pos2.z)),
+	}
+	local spoints = {
+		[1] = D3DXVECTOR2(wpoints[1].x, wpoints[1].y),
+		[2] = D3DXVECTOR2(wpoints[2].x, wpoints[2].y),
+	}
+	DrawLines2(spoints, width or 1, ParseColor(color, true))
+end
+function DrawSmartLine3D(x1, y1, z1, x2, y2, z2, width, color)
+	DrawLine3D(x1, y1, z1, x2, y2, z2, width, ParseColor(color, true))
+end
+function DrawLine3DAt(pos1, pos2, width, color)
+	DrawSmartLine3D(pos1.x, pos1.y, pos1.z, pos2.x, pos1.y, pos2.z, width, color)
+end
+function DrawSmartLineBorder(x1, y1, x2, y2, size, color, width)
+	DrawLineBorder(x1, y1, x2, y2, size, ParseColor(color, true), width)
+end
+function DrawLineBorderAt(pos1, pos2, size, color, width)
+	DrawSmartLineBorder(pos1.x, pos1.y, pos2.x, pos2.y, size, color, width)
+end
+function DrawSmartLineBorder3D(x1, y1, z1, x2, y2, z2, size, color, width)
+	DrawLineBorder3D(x1, y1, z1, x2, y2, z2, size, ParseColor(color, true), width)
+end
+function DrawLineBorder3DAt(pos1, pos2, size, color, width)
+	DrawSmartLineBorder3D(pos1.x, pos1.y, pos1.z, pos2.x, pos1.y, pos2.z, size, color, width)
+end
+function DrawSmartLines3D(points, width, color)
+	DrawLines3D(points, width, ParseColor(color, true))
+end
+
+function DrawSmartCircleMinimap(x, y, z, radius, width, color, quality)
+	DrawCircleMinimap(x, y, z, radius, width, ParseColor(color, true), quality)
+end
+function DrawCircleMinimapAt(pos, radius, width, color, quality)
+	DrawSmartCircleMinimap(pos.x, pos.y, pos.z, radius, width, color, quality)
+end
+
 function DrawDamageOnHealthBar(unit, damage, mode, color)
 	local amount = nil
 	local pos, width, height = GetBarInfo(unit)
@@ -913,48 +1060,6 @@ function DrawHealOnHealthBar(unit, heal, mode, color)
 	if (amount) then
 		DrawSmartRectangle(pos.x + amount, pos.y, 2, height, color)
 	end
-end
-function DrawSmartLineBorder3D(startX, startY, startZ, endX, endY, endZ, size, color, width)
-	DrawLineBorder3D(startX, startY, startZ, endX, endY, endZ, size, ParseColor(color, true), width or 1)
-end
-function DrawLineBorder3DAt(pos1, pos2, size, color, width)
-	DrawSmartLineBorder3D(pos1.x, pos1.y, pos1.z, pos2.x, pos1.y, pos2.z, size, color, width)
-end
-function DrawSmartLine(pos1, pos2, color, width)
-	local wpoints = {
-		[1] = WorldToScreen(D3DXVECTOR3(pos1.x, pos1.y, pos1.z)),
-		[2] = WorldToScreen(D3DXVECTOR3(pos2.x, pos1.y, pos2.z)),
-	}
-	local spoints = {
-		[1] = D3DXVECTOR2(wpoints[1].x, wpoints[1].y),
-		[2] = D3DXVECTOR2(wpoints[2].x, wpoints[2].y),
-	}
-	DrawLines2(spoints, width or 1, ParseColor(color, true))
-end
-function DrawSmartCircle3D(x, y, z, width, color, quality)
-	DrawCircle3D(x, y, z, width, ParseColor(color, true), quality or 1)
-end
-function DrawSmartCircle3DAt(pos, width, color, quality)
-	DrawSmartCircle3D(pos.x, pos.y, pos.z, width, color, quality)
-end
-function DrawSphere(x, y, z, color, size, steps, quality)
-	local size = size or 500
-	local step = size / (steps or 10)
-	local currentWidth = step
-	for i = 1, size, step do
-		DrawSmartCircle3D(x, y, z + i, currentWidth, color, quality)
-		if (currentWidth > size / 2) then
-			currentWidth = currentWidth - step
-		else
-			currentWidth = currentWidth + step
-		end
-	end
-end
-function DrawSphereAt(pos, color, size, steps, quality)
-	DrawSphere(pos.x, pos.y, pos.z, color, size, steps, quality)
-end
-function DrawingIsOnScreen(x, y, z, width)
-	return IsOnScreen(VectorOut(Vector(x, y, z), width, cameraPos))
 end
 
 ---//==================================================\\---
@@ -1235,18 +1340,6 @@ function Orbwalker:AddProcessAttackCallback(callback)
 				self.Callbacks.ProcessAttack[i](unit, attack, attack.target)
 			end
 		end)
-		--[[ Old code.
-		AddProcessSpellCallback(function(unit, spell)
-			if (unit and spell.name:lower():find("attack")) then
-				if (unit.isMe) then
-					self.AttackWindUp = spell.windUpTime
-				end
-				for _, callback in ipairs(self.Callbacks.ProcessAttack) do
-					callback(unit, spell, spell.target)
-				end
-			end
-		end)
-		--]]
 		self.__AddedProcessAttackCallback = true
 	end
 	table.insert(self.Callbacks.ProcessAttack, callback)
@@ -1434,7 +1527,6 @@ ModeHandler = ModeHandler()
 ---//==================================================\\---
 --|| > Prediction Class                                 ||--
 ---\===================================================//---
-
 Class("Prediction")
 function Prediction:__init()
 	self.Config = nil
@@ -1464,9 +1556,11 @@ function Prediction:Initialize()
 	if (FileExist(LIB_PATH.."SPrediction.lua")) then
 		table.insert(self.AvailablePredictions, "SPrediction")
 	end
+	--[[
 	if (VIP_USER and FileExist(LIB_PATH.."DivinePred.lua") and FileExist(LIB_PATH.."DivinePred.luac")) then
 		table.insert(self.AvailablePredictions, "DivinePred")
 	end
+	--]]
 end
 function Prediction:GetActivePrediction()
 	return self.AvailablePredictions[self.CurrentPrediction]
@@ -1482,95 +1576,63 @@ function Prediction:GetPredictedHealth(unit, waittime)
 	return unit.health
 end
 function Prediction:GetPrediction(unit, data, from)
-	local function CheckHitchance(hitchance)
-		if (hitchance >= 1.2) then
-			return Hitchance.High
-		elseif (hitchance >= 0.6) then
-			return Hitchance.Medium
-		elseif (hitchance > 0) then
-			return Hitchance.Low
-		end
-		return Hitchance.None
-	end
-	if (not unit) then return Vector(unit), Hitchance.None, Vector(unit) end
 	local from = from or myHero
-	local castPos, hitchance, pos = Vector(unit), Hitchance.None, Vector(unit)
+	local castPos, hitchance, pos = nil, Hitchance.None, nil
+	local hit = 0
+	if (not unit) then return castPos, hitchance, pos, hit end
 	local activePrediction = self:GetActivePrediction()
 	if (activePrediction == "VPrediction") then
-		if (data.Type == SkillshotType.Linear) then
-			castPos, hitchance, pos = self.Base.VPrediction:GetLineCastPosition(unit, data.Delay, data.Width, data.Range, data.Speed, from, data.Collision)
-		elseif (data.Type == SkillshotType.Circular) then
-			castPos, hitchance, pos = self.Base.VPrediction:GetCircularCastPosition(unit, data.Delay, data.Width, data.Range, data.Speed, from, data.Collision)
+		if (data.Type == SkillshotType.Circular) then
+			if (data.AoE) then
+				castPos, hitchance, hit, pos = self.Base.VPrediction:GetCircularAOECastPosition(unit, data.Delay, data.Radius, data.Range, data.Speed, from)
+				pos = pos[1]
+			else
+				castPos, hitchance, pos = self.Base.VPrediction:GetCircularCastPosition(unit, data.Delay, data.Radius, data.Range, data.Speed, from, data.Collision)
+			end
 		elseif (data.Type == SkillshotType.Cone) then
-			castPos, hitchance, pos = self.Base.VPrediction:GetConeAOECastPosition(unit, data.Delay, data.Width, data.Range, data.Speed, from, data.Collision)
+			if (data.AoE) then
+				castPos, hitchance, hit, pos = self.Base.VPrediction:GetConeAOECastPosition(unit, data.Delay, data.Radius, data.Range, data.Speed, from)
+				pos = pos[1]
+			else
+				castPos, hitchance, pos = self.Base.VPrediction:GetLineCastPosition(unit, data.Delay, data.Radius, data.Range, data.Speed, from, data.Collision)
+			end
+		else
+			if (data.AoE) then
+				castPos, hitchance, hit, pos = self.Base.VPrediction:GetLineAOECastPosition(unit, data.Delay, data.Radius, data.Range, data.Speed, from)
+				pos = pos[1]
+			else
+				castPos, hitchance, pos = self.Base.VPrediction:GetLineCastPosition(unit, data.Delay, data.Width, data.Range, data.Speed, from, data.Collision)
+			end
 		end
-	elseif (activePrediction == "DivinePred") then
-		_, castPos, hitchance = self.Base.DPrediction:predict(self:__GetDPredTarget(unit), data:GetDSkillshot(), self.Config.DPredPrecision, Vector(from))
-		hitchance = CheckHitchance(hitchance)
+		if (hitchance > 3) then
+			hitchance = 3
+		end
 	elseif (activePrediction == "HPrediction") then
-		local hdata = data:GetHSkillshot()
-		castPos, hitchance = self.Base.HPrediction:GetPredict(HPSkillshot(hdata), unit, from, hdata.CollisionN)
-		hitchance = CheckHitchance(hitchance)
+		castPos, hitchance, hit = self.Base.HPrediction:GetPredict(data:GetHSkillshot(), unit, from, 1, data.Range, data.Radius)
+		if (hitchance > 0) then
+			if (hitchance < 1) then
+				hitchance = 1
+			elseif (hitchance < 2) then
+				hitchance = 2
+			else
+				hitchance = 3
+			end
+		end
 	elseif (activePrediction == "SPrediction") then
-		castPos, hitchance, pos = self.Base.SPrediction:Predict(unit, data.Range, data.Speed, data.Delay, data.Width, data.Collision, from)
+		castPos, hitchance, pos = self.Base.SPrediction:Predict(unit, data.Range, data.Speed, data.Delay, data.Width, data.CollisionCountHero, from)
 	end
-	return castPos, hitchance, pos
+	if ((hit == 0) and castPos) then
+		hit = 1
+	end
+	return castPos, hitchance, pos, hit
 end
-function Prediction:GetAoePrediction(unit, data, from)
-	local from = from or myHero
-	local points = { }
-	local castPos, hitchance, pos = self:GetPrediction(unit, data, from)
-	local mainCastPos, mainHitchance, mainPos = castPos, hitchance, pos
-	table.insert(points, pos)
-	local enemies = GetEnemiesInRange(data.Range + data.Radius)
-	for i = 1, #enemies do
-		local enemy = enemies[i]
-		if (enemy.networkID ~= unit.networkID) then
-			castPos, hitchance, pos = self:GetPrediction(enemies[i], data, from)
-			if (InRange(pos, data.Range + data.Radius) and (hitchance >= Hitchance.Low)) then
-				table.insert(points, pos)
-			end
-		end
-	end
-	while (#points > 1) do
-		local mec = MEC(points)
-		local circle = mec:Compute()
-		if (circle.radius <= data.Radius + GetHitBox(unit) - 8) then
-			return circle.center, mainHitchance, #points
-		end
-		local maxDistance = -1
-		local maxDistanceIndex = 0
-		for i = 2, #points do
-			local distance = GetDistanceSqr(points[i], points[1])
-			if ((distance > maxDistance) or (maxDistance == -1)) then
-				maxDistanceIndex = i
-				maxDistance = distance
-			end
-		end
-		table.remove(points, maxDistanceIndex)
-	end
-	return mainCastPos, mainHitchance, #points
-end
-function Prediction:GetHit(position, data, from)
-	local from = from or myHero
-	local hit = { }
-	local enemies = GetEnemiesInRange(data.Range)
-	for i = 1, #enemies do
-		castPos, hitchance, pos = self:GetPrediction(enemies[i], data, from)
-		if (InRange(pos, data.Radius, position) and (hitchance >= Hitchance.Low)) then
-			table.insert(hit, enemies[i])
-		end
-	end
-	return hit
-end
-function Prediction:CheckCollision(unit, data, from)
+function Prediction:CheckCollision(unit, data, from, castPos, hits)
 	local from = from or myHero
 	local activePrediction = self:GetActivePrediction()
 	if (activePrediction == "HPrediction") then
-		return self.Base.HPrediction:CollisionStatus(data:GetHSkillshot(), unit, from, unit)
-	else
-		local castPos, hitchance, pos = self:GetPrediction(unit, data, from)
-		if (castPos and (hitchance >= Hitchance.Low)) then
+		if (data.CollisionHero and self.Base.HPrediction:HeroCollisionStatus(data:GetHSkillshot(), unit, from, castPos)) then
+			return true
+		elseif (data.CollisionMinion and self.Base.HPrediction:MinionCollisionStatus(data:GetHSkillshot(), unit, from, castPos)) then
 			return true
 		end
 	end
@@ -2026,6 +2088,7 @@ Selector = Selector()
 
 Class("Jungler")
 function Jungler:__init()
+	self.Initialized = false
 	self.Baron = nil
 	self.Dragon = nil
 	self.Blues = { }
@@ -2033,18 +2096,18 @@ function Jungler:__init()
 end
 function Jungler:__OnCreateObj(object)
 	if (object.valid and not object.dead and (object.type ~= "obj_AI_Minion")) then return end
-	if (object.charName == "SRU_Baron") then
+	if (object.charName:find("SRU_Baron")) then
 		self.Baron = object
 		PrintDebug("Baron spawned!")
-	elseif (object.charName == "SRU_Dragon") then
+	elseif (object.charName:find("SRU_Dragon")) then
 		self.Dragon = object
 		PrintDebug("Dragon spawned!")
-	elseif (object.charName == "SRU_Blue") then
+	elseif (object.charName:find("SRU_Blue")) then
 		table.insert(self.Blues, object)
 		PrintDebug("Blue spawned!")
-	elseif (object.charName == "SRU_Red") then
-		PrintDebug("Red spawned!")
+	elseif (object.charName:find("SRU_Red")) then
 		table.insert(self.Reds, object)
+		PrintDebug("Red spawned!")
 	end
 end
 function Jungler:__OnDeleteObj(object)
@@ -2075,8 +2138,10 @@ function Jungler:__OnDeleteObj(object)
 	end
 end
 function Jungler:Initialize()
+	if (self.Intialized) then return end
 	AddCreateObjCallback(function(object) self:__OnCreateObj(object) end)
 	AddDeleteObjCallback(function(object) self:__OnDeleteObj(object) end)
+	self.Initialized = true
 end
 function Jungler:Get(important, main)
 	local mobs = { }
@@ -2731,7 +2796,7 @@ function Summoners:Cast(name, unit)
 	self.List[name].Ready = false
 end
 function Summoners:IsReady(name)
-	return (self.List[name] and self.List[name].Ready)
+	return (self.List[name] and self.List[name].Ready) or false
 end
 function Summoners:Get(name)
 	return self.List[name]
@@ -2758,6 +2823,7 @@ end
 function Summoners:CanSmiteEnemies()
 	local summonerNames = { "s5_summonersmiteplayerganker", "s5_summonersmiteduel" }
 	for i = 1, #summonerNames do
+		print("summoner: "..summonerNames[i])
 		if (GetSummonerSlot(summonerNames[i])) then
 			return true
 		end
@@ -2833,11 +2899,12 @@ AutoBarrier = AutoBarrier()
 Class("AutoIgnite")
 function AutoIgnite:__init()
 	self.Config = nil
+	self.Range = 600
 end
 function AutoIgnite:Initialize()
-	Summoners:Register(SummonerSpell.Ignite, "SummonerDot", 600)
+	Summoners:Register(SummonerSpell.Ignite, "SummonerDot", self.Range)
 end
-function AutoIgnite:LoadToConfig(config)
+function AutoIgnite:LoadToConfig(config, autoCall)
 	if (not Summoners:Has(SummonerSpell.Ignite)) then return end
 	config:Toggle("Use", "Use "..SummonerSpell.Ignite, true)
 	if (ModeHandler.CanPerformCombo) then
@@ -2859,16 +2926,15 @@ function AutoIgnite:LoadToConfig(config)
 end
 function AutoIgnite:CheckForIgnite()
 	if (myHero.dead or not Summoners:IsReady(SummonerSpell.Ignite)) then return end
-	local range = Summoners:Get(SummonerSpell.Ignite).Range
-	if (self.Config.Combo and KeysConfig.Combo and Selector.Target) then
-		if (IsValid(Selector.Target, range) and HealthUnderPercent(self.Config.MaxHealth) and HealthUnderPercent(self.Config.MaxTargetHealth, Selector.Target)) then
+	if (self.Config.Combo and ModeHandler.Keys.Combo and Selector.Target) then
+		if (IsValid(Selector.Target, self.Range) and HealthUnderPercent(self.Config.MaxHealth) and HealthUnderPercent(self.Config.MaxTargetHealth, Selector.Target)) then
 			PrintDebug(Format("Casting ignite on enemy \"{1}\" for mode: combo", Selector.Target.charName))
 			Summoners:Cast(SummonerSpell.Ignite, Selector.Target)
 			return
 		end
 	end
 	if (not self.Config.Killsteal or (self.Config.RecallDisable and RecallTracker.IsRecalling)) then return end
-	local enemies = GetEnemiesInRange(range)
+	local enemies = GetEnemiesInRange(self.Range)
 	for i = 1, #enemies do
 		local enemy = enemies[i]
 		local check = true
@@ -2897,11 +2963,17 @@ AutoIgnite = AutoIgnite()
 Class("AutoSmite")
 function AutoSmite:__init()
 	self.Config = nil
+	self.Range = 600
+end
+function AutoSmite:__OnTick()
+	if (myHero.dead or not Summoners:IsReady(SummonerSpell.Smite)) then return end
+	self:SmiteMobs()
+	self:CheckForSmite()
 end
 function AutoSmite:Initialize()
-	Summoners:Register("Smite", "SummonerSmite", 600)
+	Summoners:Register(SummonerSpell.Smite, "SummonerSmite", self.Range)
 end
-function AutoSmite:LoadToConfig(config)
+function AutoSmite:LoadToConfig(config, autoCall)
 	if (not Summoners:Has(SummonerSpell.Smite)) then return end
 	config:Toggle("Use", "Use "..SummonerSpell.Smite, true)
 	config:Separator()
@@ -2922,6 +2994,55 @@ function AutoSmite:LoadToConfig(config)
 	if (RecallTracker.IsTracking) then config:Toggle("RecallDisable", "Disable While Recalling", true) end
 	config:Toggle("Fleeing", "Only if Target is Fleeing", false)
 	config:Toggle("Slower", "Only if Target is Slower", false)
+	self.Config = config
+	if (autoCall) then
+		AddTickCallback(function()
+			self:__OnTick()
+		end)
+	end
+end
+function AutoSmite:SmiteMobs()
+	if (not Jungler.Intialized or not config.Mobs) then return end
+	local damage = Summoners:GetDamage("Smite")
+	local mobs = Jungler:Get(config.Important, config.Main)
+	for i = 1, #mobs do
+		local mob = mobs[i]
+		if (InRange(mob, smite.Range) and (damage >= mob.health)) then
+			Summoners:Cast("Smite", mob)
+			PrintDebug(Format("Smiting mob => name:{1} health:{2} level:{3} damage:{4}", mob.charName, mob.health, myHero.level, damage))
+			break
+		end
+	end
+end
+function AutoSmite:CheckForSmite()
+	if (not Summoners:CanSmiteEnemies()) then return end
+	if (self.Config.Combo and ModeHandler.Keys.Combo and Selector.Target) then
+		if (IsValid(Selector.Target, self.Range) and HealthUnderPercent(self.Config.MaxHealth) and HealthUnderPercent(self.Config.MaxTargetHealth, Selector.Target)) then
+			PrintDebug(Format("Casting smite on enemy \"{1}\" for mode: combo", Selector.Target.charName))
+			Summoners:Cast(SummonerSpell.Smite, Selector.Target)
+			return
+		end
+	end
+	if (not self.Config.Killsteal or (self.Config.RecallDisable and RecallTracker.IsRecalling)) then return end
+	local enemies = GetEnemiesInRange(self.Range)
+	for i = 1, #enemies do
+		local enemy = enemies[i]
+		local check = true
+		if (not IsValid(enemy)) then
+			check = false
+		elseif (self.Config.Fleeing and not IsFleeing(enemy, self.Range)) then
+			check = false
+		elseif (self.Config.Slower and (myHero.ms > enemy.ms)) then
+			check = false
+		end
+		if (check) then
+			if (Summoners:GetDamage(SummonerSpell.Smite, enemy) >= enemy.health) then
+				PrintDebug(Format("Casting smite on enemy \"{1}\" for mode: killsteal", enemy.charName))
+				Summoners:Cast(SummonerSpell.Smite, enemy)
+				break
+			end
+		end
+	end
 end
 AutoSmite = AutoSmite()
 
@@ -3227,8 +3348,9 @@ function SpellData:__init(id, key, name, range)
 	self.Mana = 0
 	self.BaseRange = range or 0
 	self.Range = self.BaseRange
-	self.BaseWidth = 0
-	self.Width = 0
+	self.Delay = 0
+	self.Speed = math.huge
+	self.Type = SkillshotType.Targeted
 	self.Hitchance = Hitchance.Medium
 	self.IsReadyCallback = function(self)
 		if (self.Key) then
@@ -3243,6 +3365,7 @@ function SpellData:__init(id, key, name, range)
 	self.Callbacks = { }
 	self:GetName()
 	self:IsReady()
+	self:SetWidth(0)
 	self:SetRange(self.BaseRange)
 	self:SetTargeted(0, math.huge)
 	self:SetAccuracy(SpellAccuracy.Normal)
@@ -3252,13 +3375,10 @@ function SpellData:SetHitchance(hitchance)
 	self.Hitchance = hitchance
 end
 function SpellData:GetPrediction(unit)
-	return Prediction:GetPrediction(unit, self:GetPredData(), myHero)
-end
-function SpellData:GetAoePrediction(unit)
-	return Prediction:GetAoePrediction(unit, self:GetPredData(), myHero)
+	return Prediction:GetPrediction(unit, self, myHero)
 end
 function SpellData:GetHit(position)
-	return Prediction:GetHit(position, self:GetPredData(), myHero)
+	return Prediction:GetHit(position, self, myHero)
 end
 function SpellData:SetRange(range)
 	self.BaseRange = range or 0
@@ -3297,28 +3417,35 @@ end
 function SpellData:SetTargeted(delay, speed)
 	return self:SetSkillshot(0, delay, speed, false, SkillshotType.Targeted)
 end
-function SpellData:SetSkillshot(width, delay, speed, collision, skillshotType)
+function SpellData:SetSkillshot(width, delay, speed, skillshotType, collisionH, collisionM)
 	self:SetWidth(width)
 	self.Delay = delay or 0
 	self.Speed = speed or math.huge
 	self.Type = skillshotType or SkillshotType.Targeted
-	if (type(collision) == "boolean") then
-		if (collision) then
-			self.Collision = true
-			self.CollisionN = 0
-		else
-			self.Collision = false
-			self.Collision = math.huge
-		end
+	local collisionHCount = (type(collisionH) == "bool") and (collisionH and 0 or math.huge) or collisionH
+	local collisionMCount = (type(collisionM) == "bool") and (collisionM and 0 or math.huge) or collisionM
+	if (collisionM == nil) then
+		self.Collision = (collisionH == nil) and false or collisionH
+		self.CollisionHero = self.Collision
+		self.CollisionMinion = self.Collision
+		self.CollisionCountHero = self.Collision and 0 or math.huge
+		self.CollisionCountMinion = CollisionCountHero
 	else
-		if (colllision == 0) then
+		if (collisionH or collisionM) then
 			self.Collision = true
-			self.CollisionN = 0
 		else
 			self.Collision = false
-			self.CollisionN = collision
 		end
+		self.CollisionHero = collisionH
+		self.CollisionMinion = collisionM
+		self.CollisionCountHero = (type(collisionH) == "bool") and (collisionH and 0 or math.huge) or collisionH
+		self.CollisionCountMinion = (type(collisionM) == "bool") and (collisionM and 0 or math.huge) or collisionM
 	end
+	return self
+end
+function SpellData:SetAoE(isAoe, radius)
+	self.AoE = isAoe
+	self.AoERadius = radius or self.Radius
 	return self
 end
 function SpellData:SetDamage(damageType, baseDamage, perLevelDamage, scalingType, scalingStat, scalingPercent)
@@ -3330,6 +3457,11 @@ function SpellData:SetDamage(damageType, baseDamage, perLevelDamage, scalingType
 		ScalingStat = scalingStat,
 		ScalingPercent = scalingPercent or 0,
 	}
+	return self
+end
+function SpellData:AddBoundingRadius(from, unit)
+	self.AddFromBoundingRadius = (from == nil) and false or from
+	self.AddUnitBoundingRadius = (unit == nil) and false or unit
 	return self
 end
 function SpellData:Copy(id, key)
@@ -3458,7 +3590,7 @@ function SpellData:GetName()
 end
 function SpellData:AddCastCallback(callback)
 	if (#self.Callbacks == 0) then
-		Callbacks:Bind("ProcessSpell", function(unit, spell)
+		AddProcessSpellCallback(function(unit, spell)
 			if (unit and unit.isMe and spell and (spell.name == self.SpellName)) then
 				for i = 1, #self.Callbacks do
 					self.Callbacks[i](unit, spell, spell.target)
@@ -3467,17 +3599,21 @@ function SpellData:AddCastCallback(callback)
 		end)
 	end
 	table.insert(self.Callbacks, callback)
+	return self
 end
 function SpellData:SetAutoAttackResetCallback(callback)
 	self.AutoAttackResetCallback = callback
+	return self
 end
 function SpellData:SetIsReadyCallback(callback)
 	self.IsReadyCallback = callback
+	return self
 end
 function SpellData:IsAttackReset()
 	self:AddCastCallback(function(_, _, target)
 		self.AutoAttackResetCallback(target)
 	end)
+	return self
 end
 function SpellData:GetEnemiesInRange()
 	local enemies = { }
@@ -3502,93 +3638,47 @@ function SpellData:AutoTrack()
 	end)
 	return self
 end
-function SpellData:GetPredData()
-	return PredData(self.Speed, self.Delay, self.Range, self.Width, self.CollisionN, self.IsAoe, self.Type)
-end
 function SpellData:GetPredictedHealth(unit)
 	return Prediction:GetPredictedHealth(unit, self.Delay + GetDistance(myHero, unit) / self.Speed - GetRealLatency())
 end
-
----//==================================================\\---
---|| > PredData Class									||--
----\===================================================//---
-
-Class("PredData")
-function PredData:__init(speed, delay, range, width, collision, aoe, type)
-	self.Speed = speed or 0
-	self.Delay = delay or 0
-	self.Width = width or 0
-	self.Radius = Divide(self.Width, 2)
-	self.IsAoe = aoe or false
-	self.Type = type or SkillshotType.Linear
-	self:SetRange(range)
-	self:SetCollision(collision)
-end
-function PredData:SetRange(range)
-	self.Range = (range or 0) * 1.5
-end
-function PredData:SetCollision(collision)
-	local collision = collision or math.huge
-	if (type(collision) == "number") then
-		self.CollisionN = collision
-		if (collision < math.huge) then
-			self.Collision = true
-		else
-			self.Collision = false
-		end
-	else
-		self.Collision = collision
-		if (collision) then
-			self.CollisionN = 0
-		else
-			self.CollisionN = math.huge
-		end
-	end
-end
-function PredData:GetDSkillshot()
-	local delay = self.Delay * 1000
-	if (self.Type == SkillshotType.Circular) then
-		return CircleSS(self.Speed, self.Range, self.Radius, delay, self.CollisionN)
-	elseif (self.Type == SkillshotType.Cone) then
-		return ConeSS(self.Speed, self.Range, self.Radius, delay, self.CollisionN)
-	else
-		return LineSS(self.Speed, self.Range, self.Radius, delay, self.CollisionN)
-	end
-end
-function PredData:GetHSkillshot()
-	local stype = "DelayLine"
-	if (self.Type == SkillshotType.Linear) then
-		if (self.Speed == math.huge) then
-			stype = "PromptLine"
-		end
-	elseif (self.Type == SkillshotType.Circular) then
-		if (self.Speed == math.huge) then
-			stype = "PromptCircle"
-		else
-			stype = "DelayCircle"
-		end
-	end
-	local data = {
-		type = stype,
+function SpellData:GetHSkillshot()
+	local spell = {
 		delay = self.Delay,
 		range = self.Range,
-		speed = (self.Speed == math.huge) and nil or self.Speed,
-		IsLowAccuracy = self.IsLowAccuracy and true or nil,
-		IsVeryLowAccuracy = self.IsVeryLowAccuracy and true or nil,
 	}
-	if (self.Type == SkillshotType.Linear) then
-		data.width = self.Width
-		if (self.Collision) then
-			data.collisionM = true
-			data.collisionH = true
+	if (self.Speed < math.huge) then
+		spell.speed = self.Speed
+		if (self.Type == SkillshotType.Circular) then
+			spell.type = "DelayCircle"
+		else
+			spell.type = "DelayLine"
 		end
-	elseif (self.Type == SkillshotType.Circular) then
-		data.radius = self.Width / 2
-		data.addunitboundingRadius = true
 	else
-		data.width = self.Width
+		if (self.Type == SkillshotType.Circular) then
+			spell.type = "PromptCircle"
+		else
+			spell.type = "PromptLine"
+		end
 	end
-	return data
+	if (self.Type == SkillshotType.Linear) then
+		spell.collisionH = self.CollisionHero
+		spell.collisionM = self.CollisionMinion
+		spell.width = self.Width
+	elseif (self.Type == SkillshotType.Circular) then
+		spell.radius = self.Radius
+		if (self.AddFromBoundingRadius) then
+			spell.addmyboundingRadius = true
+		end
+		if (self.AddUnitBoundingRadius) then
+			spell.addunitboundingRadius = true
+		end
+	end
+	if (self.Accuracy == SpellAccuracy.Low) then
+		spell.IsLowAccuracy = true
+	elseif (self.Accuracy == SpellAccuracy.VeryLow) then
+		spell.IsVeryLowAccuracy  = true
+	end
+	return HPSkillshot(spell)
 end
 
 ---//==================================================\\---
@@ -3649,11 +3739,15 @@ function scriptConfig:ColorBox(name, title, default)
 	self:addParam(name, title, SCRIPT_PARAM_COLOR, ParseColor(default))
 	return { SetCallback = function(_, callback) self:SetCallback(name, callback) end }
 end
-function scriptConfig:Dynamic(name, title, dtype, default, key)
+function scriptConfig:Dynamic(name, title, dtype, default, key, force)
 	if (type(key) == "string") then
 		key = string.byte(key)
 	end
 	self:addDynamicParam(name, title, dtype, default, key)
+	if (force ~= nil) then
+		self[name] = force
+	end
+	self:Save()
 	return { SetCallback = function(_, callback) self:SetCallback(name, callback) end }
 end
 function scriptConfig:SetCallback(name, callback)
