@@ -6,9 +6,19 @@
 
 	Script:     A1-Config
 	Version:    1.01
-	Build Date: 2015-11-16
+	Build Date: 2015-11-21
 	Author:     Devn
 	
+---//==================================================\\---
+--|| > Release Changelog                                ||--
+---\\==================================================//---
+
+	Version 1.00:
+		- Initial script release.
+		
+	Version 1.01:
+		- Fixed bug with list param when value was a number.
+
 ---//==================================================\\---
 --|| > Notes                                            ||--
 ---\\==================================================//---
