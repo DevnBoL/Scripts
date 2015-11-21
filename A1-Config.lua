@@ -5,7 +5,7 @@
 ---\\==================================================//---
 
 	Script:     A1-Config
-	Version:    1.00
+	Version:    1.01
 	Build Date: 2015-11-16
 	Author:     Devn
 	
@@ -630,7 +630,7 @@ function _G.scriptConfig:OnDraw()
 		if (self._param[i].pType == SCRIPT_PARAM_ONOFF) then
 			DrawToggleSprite(self._x, self._y, self._param[i].text, var)
 		elseif (self._param[i].pType == SCRIPT_PARAM_INFO) then
-			DrawInfoSprite(self._x, self._y, self._param[i].text, var)
+			DrawInfoSprite(self._x, self._y, self._param[i].text, tostring(var))
 		elseif (self._param[i].pType == SCRIPT_PARAM_COLOR) then
 			DrawColorSprite(self._x, self._y, self._param[i].text, var)
 		elseif (self._param[i].pType == SCRIPT_PARAM_SLICE) then
@@ -862,7 +862,7 @@ function _G.TS_Ignore(target, enemyTeam)
 end
 
 function OnLoad()
-	PrintLocal("Version 1.00 by Devn loaded successfully!")
+	PrintLocal("Version 1.01 by Devn loaded successfully!")
 end
 function OnUnload()
 	SaveMaster()
