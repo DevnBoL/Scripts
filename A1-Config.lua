@@ -17,7 +17,7 @@
 		- Initial script release.
 		
 	Version 1.01:
-		- Fixed bug with list param when value was a number.
+		- Fixed a bug with info param when value was a number.
 
 ---//==================================================\\---
 --|| > Notes                                            ||--
@@ -506,10 +506,11 @@ function DrawToggleSprite(x, y, text, active)
 	DrawTextA(active and "ON" or "OFF", Draw.FontSize, buttonx + ((Draw.Width - Draw.Row3) / 2) + Draw.Padding, buttony + (Draw.CellHeight / 2), LightGray, "center", "center")
 end
 function DrawInfoSprite(x, y, text, info)
+	local info = info and ((type(info) == "number") and tostring(info)) or info
 	--DrawRectangle(x, y, Draw.Width, Draw.CellHeight, FontColor)
 	DrawRectangle(x + 1, y + 1, Draw.Width - 2, Draw.CellHeight - 2, Background)
 	DrawTextA(text, Draw.FontSize, x + (Draw.Padding * 2), y + (Draw.CellHeight / 2), FontColor, nil, "center")
-	if (info:len() > 0) then
+	if (info and (info:len() > 0)) then
 		DrawLines2({ D3DXVECTOR2(x + Draw.Row3 - 2, y + 1), D3DXVECTOR2(x + Draw.Row3 - 2, y + Draw.CellHeight) }, 1, FontColor)
 		DrawRectangle(x + Draw.Row3 - 1, y + 1, Draw.Width - Draw.Row3, Draw.CellHeight - 2, Foreground)
 		DrawTextA(info, Draw.FontSize, x + Draw.Row3 - 1 + ((Draw.Width - Draw.Row3) / 2), y + 1 + ((Draw.CellHeight - 2) / 2), FontColor, "center", "center")
@@ -640,7 +641,7 @@ function _G.scriptConfig:OnDraw()
 		if (self._param[i].pType == SCRIPT_PARAM_ONOFF) then
 			DrawToggleSprite(self._x, self._y, self._param[i].text, var)
 		elseif (self._param[i].pType == SCRIPT_PARAM_INFO) then
-			DrawInfoSprite(self._x, self._y, self._param[i].text, tostring(var))
+			DrawInfoSprite(self._x, self._y, self._param[i].text, var)
 		elseif (self._param[i].pType == SCRIPT_PARAM_COLOR) then
 			DrawColorSprite(self._x, self._y, self._param[i].text, var)
 		elseif (self._param[i].pType == SCRIPT_PARAM_SLICE) then
